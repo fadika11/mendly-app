@@ -1,38 +1,24 @@
-// react-app/src/pages/JourneyOverviewPage.tsx
 import React, { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import logo from "../assets/mendly-logo.jpg";
 import heroImage from "../assets/peace-quote.png";
-import { getMoodSeries, type SeriesPoint } from "../api/auth";
 import {
-  startListening as startAudioMonitor,
-  stopListening as stopAudioMonitor,
-} from "../utils/audioMonitor";
+  getMoodSeries,
+  uploadAudioForMood,
+  type SeriesPoint,
+} from "../api/auth";
+import { AudioMonitor } from "../plugins/AudioMonitor";
+import HappyPhotoMemoriesButton from "../components/HappyPhotoMemoriesButton";
 
-import { Capacitor } from "@capacitor/core";
+const LOW_MOOD_THRESHOLD = 2;
+const MEMORY_LOW_MOOD_THRESHOLD = 3;
 
-// ✅ Background “always-on” audio monitor (Foreground Service)
-import { AudioMonitor, type AudioEvent } from "../plugins/AudioMonitor";
-
-const LOW_MOOD_THRESHOLD = 2; // <= avg → PHQ intro
-const MEMORY_LOW_MOOD_THRESHOLD = 3; // <= avg → happy memories popup
-
-// 🔹 API base for backend calls
 const isNative = (window as any).Capacitor?.isNativePlatform?.() ?? false;
 const API_BASE = isNative
-  ? "http://10.0.2.2:8000" // emulator → host machine
-  : (import.meta.env.VITE_API_URL as string | undefined) ??
-    "http://localhost:8000";
+  ? "http://10.0.2.2:8000"
+  : (import.meta.env.VITE_API_URL as string | undefined) ?? "http://localhost:8000";
 
-interface PendingMemory {
-  id: string; // local-only id
-  file: File;
-  previewUrl: string; // URL.createObjectURL
-  caption: string;
-  memoryDate: string;
-}
 
-// Saved memory coming from backend
 interface HappyMemory {
   memory_id: string;
   image_url: string;
@@ -47,7 +33,6 @@ const JourneyOverviewPage: React.FC = () => {
   const BLUE = "#6BA7E6";
   const CREAM = "#f5e9d9";
 
-  // ===== Mood tracking tips for the Posts card =====
   const moodTips: string[] = [
     "Notice how your sleep affects your mood.",
     "Track how different foods make you feel.",
@@ -61,55 +46,158 @@ const JourneyOverviewPage: React.FC = () => {
   const [currentTipIndex, setCurrentTipIndex] = useState(0);
   const [isPaused, setIsPaused] = useState(false);
 
-  // ===== Mood data for last 14 days (for PHQ / memories trigger) =====
   const [series14, setSeries14] = useState<SeriesPoint[] | null>(null);
   const [loadingMood, setLoadingMood] = useState<boolean>(true);
   const [moodError, setMoodError] = useState<string | null>(null);
 
-  // 🔹 screening status from backend
   const [lastPhq2Date, setLastPhq2Date] = useState<string | null>(null);
-  const [lastPhotoMemoriesDate, setLastPhotoMemoriesDate] =
-    useState<string | null>(null);
-  const [screeningStatusLoaded, setScreeningStatusLoaded] =
-    useState<boolean>(false);
+  const [lastPhotoMemoriesDate, setLastPhotoMemoriesDate] = useState<string | null>(null);
+  const [screeningStatusLoaded, setScreeningStatusLoaded] = useState<boolean>(false);
 
-  // should we show the PHQ intro popup?
   const [showScreeningIntro, setShowScreeningIntro] = useState(false);
 
-  // Weekly happy photo reminder
   const [photoReminder, setPhotoReminder] = useState<{
     image_url: string;
     caption: string | null;
     message: string;
   } | null>(null);
 
-  // 🔹 Happy memories modal state (manual add)
-  const [showMemoriesModal, setShowMemoriesModal] = useState(false);
-
-  // 👉 LOCAL pending memories (only in modal until user saves all)
-  const [pendingMemories, setPendingMemories] = useState<PendingMemory[]>([]);
-  const [memoriesError, setMemoriesError] = useState<string | null>(null);
-  const [savingAll, setSavingAll] = useState(false);
-
-  // inline “new memory” fields
-  const [newFile, setNewFile] = useState<File | null>(null);
-  const [newCaption, setNewCaption] = useState("");
-  const [newMemoryDate, setNewMemoryDate] = useState("");
-
-  // 🔹 Auto “low mood memories” popup (read-only gallery)
-  const [showAutoMemoriesOverlay, setShowAutoMemoriesOverlay] =
-    useState(false);
+  const [showAutoMemoriesOverlay, setShowAutoMemoriesOverlay] = useState(false);
   const [autoMemories, setAutoMemories] = useState<HappyMemory[]>([]);
   const [autoMemoriesLoading, setAutoMemoriesLoading] = useState(false);
-  const [autoMemoriesError, setAutoMemoriesError] = useState<string | null>(
-    null
-  );
+  const [autoMemoriesError, setAutoMemoriesError] = useState<string | null>(null);
 
-  // 🔍 full-screen image inside the auto-memories popup
   const [fullScreenAutoMemory, setFullScreenAutoMemory] = useState<{
     src: string;
     caption: string | null;
   } | null>(null);
+
+  // ===== Native audio recording + analysis state =====
+  const [isListening, setIsListening] = useState(false);
+  const [isAnalyzingAudio, setIsAnalyzingAudio] = useState(false);
+  const [voiceText, setVoiceText] = useState<string>("");
+  const [voiceError, setVoiceError] = useState<string | null>(null);
+  const [lastAudioResult, setLastAudioResult] = useState<{
+    ok: boolean;
+    emotion?: string;
+    confidence?: number;
+    mendly_state?: string;
+    message?: string;
+    score_saved?: number;
+    label_saved?: string;
+    mood_source?: string;
+  } | null>(null);
+
+  const nativeRecordingRef = useRef(false);
+
+  const base64ToBlob = (base64: string, mimeType: string): Blob => {
+    const binary = window.atob(base64);
+    const len = binary.length;
+    const bytes = new Uint8Array(len);
+
+    for (let i = 0; i < len; i += 1) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+
+    return new Blob([bytes], { type: mimeType });
+  };
+
+  const refreshMoodSeries = async () => {
+    try {
+      setLoadingMood(true);
+      const data = await getMoodSeries(14);
+      setSeries14(data);
+      setMoodError(null);
+    } catch (err) {
+      console.error("Failed to refresh mood series", err);
+      setMoodError("Failed to refresh mood data");
+    } finally {
+      setLoadingMood(false);
+    }
+  };
+
+  const handleStartListening = async () => {
+    try {
+      setVoiceError(null);
+      setVoiceText("Starting native recording...");
+      setLastAudioResult(null);
+
+      setVoiceText("Starting native recording...");
+      await AudioMonitor.startRecording();
+      nativeRecordingRef.current = true;
+      setIsListening(true);
+      setVoiceText("Listening... you can speak now.");
+    } catch (err: any) {
+      console.error("[audio] native start failed", err);
+      setVoiceText("");
+      setIsListening(false);
+      nativeRecordingRef.current = false;
+      setVoiceError(err?.message || "Could not start native audio recording.");
+    }
+  };
+
+  const handleStopListening = async () => {
+    try {
+      setVoiceError(null);
+
+      if (!nativeRecordingRef.current) {
+        setIsListening(false);
+        setVoiceText("");
+        return;
+      }
+
+      setVoiceText("Stopping recording...");
+      const recorded = await AudioMonitor.stopRecording();
+
+      nativeRecordingRef.current = false;
+      setIsListening(false);
+
+      if (!recorded?.base64) {
+        throw new Error("Recorded audio was empty.");
+      }
+
+      const blob = base64ToBlob(recorded.base64, recorded.mimeType || "audio/mp4");
+
+      if (!blob.size) {
+        throw new Error("Recorded audio file is empty.");
+      }
+
+      setIsAnalyzingAudio(true);
+      setVoiceText("Uploading and analyzing audio...");
+
+      const result = await uploadAudioForMood(
+        blob,
+        recorded.fileName || "mood-recording.m4a"
+      );
+      console.log("[audio] backend result:", result);
+
+      setLastAudioResult(result);
+
+      if (result.ok) {
+        setVoiceText(
+          `Detected: ${result.emotion ?? "unknown"} • score saved: ${result.score_saved ?? "-"}`
+        );
+        await refreshMoodSeries();
+      } else {
+        setVoiceText("");
+        setVoiceError(result.message || "Audio analysis failed.");
+      }
+    } catch (err: any) {
+      console.error("[audio] native stop/upload failed", err);
+      setVoiceText("");
+      setVoiceError(err?.message || "Could not process recorded audio.");
+      setIsListening(false);
+      nativeRecordingRef.current = false;
+    } finally {
+      setIsAnalyzingAudio(false);
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      nativeRecordingRef.current = false;
+    };
+  }, []);
 
   // --- fetch last 14-day mood series once ---
   useEffect(() => {
@@ -141,7 +229,7 @@ const JourneyOverviewPage: React.FC = () => {
     };
   }, []);
 
-  // --- fetch screening status (last PHQ-2 date + last memories popup date) ---
+  // --- fetch screening status ---
   useEffect(() => {
     let cancelled = false;
 
@@ -188,7 +276,6 @@ const JourneyOverviewPage: React.FC = () => {
     };
   }, []);
 
-  // --- helper: mark in DB that memories popup was shown today ---
   const markMemoriesPopupShownToday = async () => {
     try {
       const token = window.localStorage.getItem("access_token");
@@ -210,7 +297,6 @@ const JourneyOverviewPage: React.FC = () => {
     }
   };
 
-  // --- helper: open auto memories popup (load all saved memories from backend) ---
   const openAutoMemoriesPopup = async () => {
     try {
       const token = window.localStorage.getItem("access_token");
@@ -245,7 +331,7 @@ const JourneyOverviewPage: React.FC = () => {
     }
   };
 
-  // --- decide when to show PHQ intro and when to show memories popup (once per day) ---
+  // --- decide when to show PHQ intro and when to show memories popup ---
   useEffect(() => {
     if (loadingMood || !screeningStatusLoaded) return;
     if (!series14 || series14.length === 0) return;
@@ -275,13 +361,11 @@ const JourneyOverviewPage: React.FC = () => {
     const alreadyScreenedToday = lastScreenDate === today;
     const alreadySawMemoriesToday = lastMemoriesDate === today;
 
-    // 1) PHQ intro if avg <= 2 and not yet screened today
     if (avg <= LOW_MOOD_THRESHOLD && !alreadyScreenedToday) {
       setShowScreeningIntro(true);
       return;
     }
 
-    // 2) Memories popup if avg <= 3 and NOT already shown today
     if (avg <= MEMORY_LOW_MOOD_THRESHOLD && !alreadySawMemoriesToday) {
       void openAutoMemoriesPopup();
     }
@@ -293,7 +377,6 @@ const JourneyOverviewPage: React.FC = () => {
     lastPhotoMemoriesDate,
   ]);
 
-  // ===== auto-rotate tips every 5 seconds (when not paused) =====
   useEffect(() => {
     if (isPaused) return;
 
@@ -304,7 +387,6 @@ const JourneyOverviewPage: React.FC = () => {
     return () => window.clearInterval(id);
   }, [isPaused, moodTips.length]);
 
-  // ===== weekly photo candidate fetch (also once per day per user) =====
   useEffect(() => {
     if (!screeningStatusLoaded) return;
 
@@ -326,290 +408,7 @@ const JourneyOverviewPage: React.FC = () => {
   const secondTipIndex = (currentTipIndex + 1) % moodTips.length;
   const thirdTipIndex = (secondTipIndex + 1) % moodTips.length;
 
-  // ===== Happy memories: LOCAL helpers (add & save) =====
-
-  const handleAddPendingMemory = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newFile) {
-      setMemoriesError("Please choose an image file.");
-      return;
-    }
-
-    const id =
-      window.crypto && "randomUUID" in window.crypto
-        ? (window.crypto.randomUUID as () => string)()
-        : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-
-    const previewUrl = URL.createObjectURL(newFile);
-
-    setPendingMemories((prev) => [
-      ...prev,
-      {
-        id,
-        file: newFile,
-        previewUrl,
-        caption: newCaption.trim(),
-        memoryDate: newMemoryDate,
-      },
-    ]);
-
-    setNewFile(null);
-    setNewCaption("");
-    setNewMemoryDate("");
-    const inputEl = document.getElementById(
-      "happy-photo-input-inline"
-    ) as HTMLInputElement | null;
-    if (inputEl) {
-      inputEl.value = "";
-    }
-    setMemoriesError(null);
-  };
-
-  const handlePendingFieldChange = (
-    id: string,
-    field: "caption" | "memoryDate",
-    value: string
-  ) => {
-    setPendingMemories((prev) =>
-      prev.map((m) =>
-        m.id === id
-          ? {
-              ...m,
-              [field]: value,
-            }
-          : m
-      )
-    );
-  };
-
-  const handleRemovePendingMemory = (id: string) => {
-    setPendingMemories((prev) => {
-      const target = prev.find((m) => m.id === id);
-      if (target) {
-        URL.revokeObjectURL(target.previewUrl);
-      }
-      return prev.filter((m) => m.id !== id);
-    });
-  };
-
-  const handleSaveAllMemories = async () => {
-    if (!pendingMemories.length) {
-      setMemoriesError("Add at least one photo before saving.");
-      return;
-    }
-
-    try {
-      setSavingAll(true);
-      setMemoriesError(null);
-
-      const token = window.localStorage.getItem("access_token");
-      if (!token) {
-        setMemoriesError("You must be logged in.");
-        setSavingAll(false);
-        return;
-      }
-
-      for (const mem of pendingMemories) {
-        const formData = new FormData();
-        formData.append("file", mem.file);
-        if (mem.caption.trim()) formData.append("caption", mem.caption.trim());
-        if (mem.memoryDate) formData.append("memory_date", mem.memoryDate);
-
-        const res = await fetch(`${API_BASE}/photo-memories/upload`, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-          body: formData,
-        });
-
-        if (!res.ok) {
-          let detail = "Could not upload one of the photos.";
-          try {
-            const data = await res.json();
-            if (data.detail) detail = data.detail;
-          } catch {
-            /* ignore */
-          }
-          setMemoriesError(detail);
-          setSavingAll(false);
-          return;
-        }
-      }
-
-      pendingMemories.forEach((m) => URL.revokeObjectURL(m.previewUrl));
-      setPendingMemories([]);
-      setShowMemoriesModal(false);
-      navigate("/photo-memories");
-    } catch (err) {
-      console.error("Error uploading memories", err);
-      setMemoriesError("Could not upload the photos.");
-    } finally {
-      setSavingAll(false);
-    }
-  };
-
-  useEffect(
-    () => () => {
-      pendingMemories.forEach((m) => URL.revokeObjectURL(m.previewUrl));
-    },
-    [pendingMemories]
-  );
-
-  const safeMsg = (e: any) => {
-  if (!e) return "Unknown error";
-  if (typeof e === "string") return e;
-  if (typeof e?.message === "string") return e.message;
-  try {
-    return JSON.stringify(e);
-  } catch {
-    return String(e);
-  }
-};
-
-const logToServer = async (message: string, extra?: any) => {
-  try {
-    const token = window.localStorage.getItem("access_token");
-    await fetch(`${API_BASE}/debug/log`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      body: JSON.stringify({
-        source: "JourneyOverviewPage.AudioMonitor",
-        message,
-        extra,
-        ts: new Date().toISOString(),
-      }),
-    });
-  } catch {
-    // ignore if backend endpoint doesn't exist / network error
-  }
-};
-
-
-  // =========================
-// 🎙️ Background Audio Monitor (Foreground Service)
-// =========================
-const [isListening, setIsListening] = useState(false);
-const [voiceText, setVoiceText] = useState<string>("");
-const [voiceError, setVoiceError] = useState<string | null>(null);
-const [lastAudioEvent, setLastAudioEvent] = useState<AudioEvent | null>(null);
-
-const isNativePlatform = Capacitor.isNativePlatform?.() ?? false;
-const isAndroid =
-  isNativePlatform && (Capacitor.getPlatform?.() ?? "") === "android";
-
-const audioListenerRef = useRef<{ remove: () => void } | null>(null);
-
-// On mount: attach listener (only once) + sync running state
-useEffect(() => {
-  let cancelled = false;
-
-  const setup = async () => {
-    if (!isAndroid) return;
-
-    try {
-      // sync running state (service may still be running from before)
-      const st = await AudioMonitor.isRunning();
-      if (!cancelled) setIsListening(!!st?.running);
-
-      // attach event listener once
-      if (!audioListenerRef.current) {
-        const handle = await AudioMonitor.addListener("audioEvent", (ev) => {
-          setLastAudioEvent(ev);
-
-          const label =
-            ev.type === "CRY"
-              ? "Possible crying detected"
-              : ev.type === "SCREAM"
-              ? "Loud / stress sound detected"
-              : ev.type === "SILENCE"
-              ? "Silence"
-              : "Sound detected";
-
-          setVoiceText(`${label} (${Math.round((ev.confidence ?? 0) * 100)}%)`);
-        });
-
-        audioListenerRef.current = handle as any;
-      }
-    } catch (e) {
-      console.warn("AudioMonitor setup failed", e);
-    }
-  };
-
-  void setup();
-
-  return () => {
-    cancelled = true;
-
-    // remove JS listener only (do NOT stop service on unmount)
-    try {
-      audioListenerRef.current?.remove?.();
-    } catch {
-      /* ignore */
-    } finally {
-      audioListenerRef.current = null;
-    }
-  };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, []);
-
-// ✅ UI handlers (renamed so they don't clash with imports)
-const handleStartListening = async () => {
-  setVoiceError(null);
-  setVoiceText("");
-  setLastAudioEvent(null);
-
-  if (!isAndroid) {
-    const msg = "Background voice monitoring works only in the Android app.";
-    setVoiceError(msg);
-    alert(msg);
-    return;
-  }
-
-  try {
-    await startAudioMonitor(); // your imported wrapper
-    setIsListening(true);
-    setVoiceText("Mendly is listening in the background. Check your notification.");
-  } catch (e: any) {
-    const msg = safeMsg(e);
-    console.error("Audio monitor start failed:", e);
-    setVoiceError(msg);
-    alert("Audio monitor start failed:\n" + msg);
-
-    // 🔥 send to backend terminal (if you add /debug/log)
-    await logToServer("Audio monitor START failed", { msg, raw: e });
-
-    setIsListening(false);
-  }
-};
-
-
-const handleStopListening = async () => {
-  setVoiceError(null);
-
-  try {
-    if (!isAndroid) {
-      setIsListening(false);
-      return;
-    }
-    await stopAudioMonitor(); // your imported wrapper
-  } catch (e: any) {
-    const msg = safeMsg(e);
-    console.warn("Audio monitor stop failed:", e);
-    setVoiceError(msg);
-    alert("Audio monitor stop failed:\n" + msg);
-    await logToServer("Audio monitor STOP failed", { msg, raw: e });
-  } finally {
-    setIsListening(false);
-    setVoiceText("Stopped listening.");
-  }
-};
-
-
-  // ===== STYLES =====
+  
   const screenStyle: React.CSSProperties = {
     height: "100vh",
     width: "100vw",
@@ -622,6 +421,7 @@ const handleStopListening = async () => {
     fontFamily:
       '"Poppins", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
   };
+
   const phoneStyle: React.CSSProperties = {
     width: "100%",
     height: "100%",
@@ -635,6 +435,7 @@ const handleStopListening = async () => {
     boxSizing: "border-box",
     position: "relative",
   };
+
   const topSectionStyle: React.CSSProperties = {
     backgroundColor: CREAM,
     paddingTop: 20,
@@ -701,7 +502,6 @@ const handleStopListening = async () => {
     objectFit: "cover",
   };
 
-  // CONTENT AREA
   const bottomSectionStyle: React.CSSProperties = {
     flex: 1,
     padding: "0 0 16px 0",
@@ -743,6 +543,7 @@ const handleStopListening = async () => {
     alignItems: "center",
     justifyContent: "center",
   };
+
   const heroMediaStyle: React.CSSProperties = {
     width: "100%",
     height: "100%",
@@ -808,7 +609,6 @@ const handleStopListening = async () => {
     opacity: 0.65,
   };
 
-  // Popups
   const overlayStyle: React.CSSProperties = {
     position: "absolute",
     inset: 0,
@@ -856,7 +656,6 @@ const handleStopListening = async () => {
     paddingBlock: 10,
   };
 
-  // Happy memories modal styles
   const memoriesOverlayStyle: React.CSSProperties = {
     position: "absolute",
     inset: 0,
@@ -904,43 +703,6 @@ const handleStopListening = async () => {
     boxShadow: "0 3px 8px rgba(15, 23, 42, 0.15)",
   };
 
-  const memoriesUploadRow: React.CSSProperties = {
-    display: "flex",
-    flexDirection: "column",
-    gap: 6,
-    marginBottom: 6,
-    padding: 8,
-    borderRadius: 14,
-    backgroundColor: "rgba(255, 255, 255, 0.9)",
-  };
-
-  const memoriesInputRow: React.CSSProperties = {
-    display: "flex",
-    flexWrap: "wrap",
-    gap: 6,
-    alignItems: "center",
-  };
-
-  const smallInput: React.CSSProperties = {
-    borderRadius: 8,
-    border: "1px solid #d1d5db",
-    padding: "4px 6px",
-    fontSize: 12,
-    flex: "1 1 120px",
-  };
-
-  const smallUploadBtn: React.CSSProperties = {
-    border: "none",
-    borderRadius: 999,
-    padding: "7px 12px",
-    backgroundColor: "#2563eb",
-    color: "#f9fafb",
-    fontSize: 12,
-    fontWeight: 600,
-    cursor: "pointer",
-    whiteSpace: "nowrap",
-    boxShadow: "0 4px 10px rgba(37, 99, 235, 0.3)",
-  };
 
   const memoriesGrid: React.CSSProperties = {
     flex: 1,
@@ -982,39 +744,7 @@ const handleStopListening = async () => {
     gap: 4,
   };
 
-  const tinyLabel: React.CSSProperties = {
-    fontSize: 10,
-    color: "#4b5563",
-  };
 
-  const tinyInput: React.CSSProperties = {
-    borderRadius: 8,
-    border: "1px solid #d1d5db",
-    padding: "2px 4px",
-    fontSize: 11,
-    width: "100%",
-    height: 26,
-    boxSizing: "border-box",
-  };
-
-  const tinyButtonsRow: React.CSSProperties = {
-    display: "flex",
-    justifyContent: "space-between",
-    gap: 4,
-    marginTop: 2,
-  };
-
-  const tinyBtn: React.CSSProperties = {
-    border: "none",
-    borderRadius: 999,
-    padding: "3px 6px",
-    fontSize: 10,
-    fontWeight: 600,
-    cursor: "pointer",
-    flex: 1,
-  };
-
-  // full-screen image overlay style (auto memories)
   const fullScreenOverlay: React.CSSProperties = {
     position: "absolute",
     inset: 0,
@@ -1077,12 +807,12 @@ const handleStopListening = async () => {
   const micBtnStyle: React.CSSProperties = {
     position: "absolute",
     right: 16,
-    bottom: 70, // above bottom nav
+    bottom: 70,
     width: 52,
     height: 52,
     borderRadius: 999,
     border: "none",
-    cursor: "pointer",
+    cursor: isAnalyzingAudio ? "default" : "pointer",
     backgroundColor: isListening ? "#dc2626" : "#2563eb",
     color: "#f9fafb",
     fontSize: 22,
@@ -1091,12 +821,12 @@ const handleStopListening = async () => {
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
+    opacity: isAnalyzingAudio ? 0.7 : 1,
   };
 
   return (
     <div style={screenStyle}>
       <div style={phoneStyle}>
-        {/* HEADER */}
         <div style={topSectionStyle}>
           <button
             type="button"
@@ -1132,7 +862,6 @@ const handleStopListening = async () => {
           </button>
         </div>
 
-        {/* CONTENT */}
         <div style={bottomSectionStyle}>
           <div style={heroImageCard}>
             <img
@@ -1200,6 +929,14 @@ const handleStopListening = async () => {
               Positive Notifications / Motivation Notes
             </button>
 
+            <button
+              type="button"
+              style={{ ...actionBtn, marginTop: 4 }}
+              onClick={() => navigate("/control-circle")}
+            >
+              Circle of Control
+            </button>
+
             <div
               style={{ ...cardStyle }}
               onMouseDown={handleHoldStart}
@@ -1237,7 +974,6 @@ const handleStopListening = async () => {
           </div>
         </div>
 
-        {/* BOTTOM NAV */}
         <div style={bottomNavStyle}>
           <div
             style={navItemStyle}
@@ -1249,14 +985,7 @@ const handleStopListening = async () => {
             <div>Profile</div>
           </div>
 
-          <div
-            style={navItemStyle}
-            onClick={() => setShowMemoriesModal(true)}
-            role="button"
-            aria-label="Add happy memory"
-          >
-            <div style={{ fontSize: 22 }}>📷</div>
-          </div>
+          <HappyPhotoMemoriesButton navItemStyle={navItemStyle} />
 
           <div
             style={navItemStyle}
@@ -1269,7 +998,6 @@ const handleStopListening = async () => {
           </div>
         </div>
 
-        {/* ===== PHQ INTRO POPUP ===== */}
         {showScreeningIntro && (
           <div style={overlayStyle}>
             <div style={modalStyle}>
@@ -1298,7 +1026,6 @@ const handleStopListening = async () => {
           </div>
         )}
 
-        {/* ===== Weekly Happy Photo popup ===== */}
         {photoReminder && (
           <div
             style={{
@@ -1379,7 +1106,6 @@ const handleStopListening = async () => {
           </div>
         )}
 
-        {/* ===== Auto Memories Popup (read-only gallery, once per day) ===== */}
         {showAutoMemoriesOverlay && (
           <div style={memoriesOverlayStyle}>
             <div style={memoriesModalStyle}>
@@ -1430,9 +1156,7 @@ const handleStopListening = async () => {
                   {autoMemories.map((m) => {
                     const imgSrc = m.image_url.startsWith("http")
                       ? m.image_url
-                      : `${API_BASE}${m.image_url.startsWith("/") ? "" : "/"}${
-                          m.image_url
-                        }`;
+                      : `${API_BASE}${m.image_url.startsWith("/") ? "" : "/"}${m.image_url}`;
                     return (
                       <div key={m.memory_id} style={memoriesCard}>
                         <div
@@ -1469,7 +1193,6 @@ const handleStopListening = async () => {
           </div>
         )}
 
-        {/* full-screen image inside auto-memories popup */}
         {fullScreenAutoMemory && (
           <div style={fullScreenOverlay}>
             <div style={fullScreenInner}>
@@ -1497,208 +1220,18 @@ const handleStopListening = async () => {
           </div>
         )}
 
-        {/* ===== Happy Memories Modal (staging area, then Save all) ===== */}
-        {showMemoriesModal && (
-          <div style={memoriesOverlayStyle}>
-            <div style={memoriesModalStyle}>
-              <div style={memoriesHeaderRow}>
-                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <span role="img" aria-label="camera">
-                    📷
-                  </span>
-                  <span style={{ fontWeight: 700, fontSize: 15 }}>
-                    Happy Photo Memories
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  style={smallIconBtn}
-                  onClick={() => setShowMemoriesModal(false)}
-                >
-                  ✕
-                </button>
-              </div>
-
-              <div style={{ fontSize: 12, color: "#4b5563", marginBottom: 4 }}>
-                Add a few photos that make you smile. They’ll be saved only when
-                you hit <strong>Save all</strong>. 💙
-              </div>
-
-              <form onSubmit={handleAddPendingMemory} style={memoriesUploadRow}>
-                <div style={memoriesInputRow}>
-                  <input
-                    id="happy-photo-input-inline"
-                    type="file"
-                    accept="image/*"
-                    onChange={(e) =>
-                      setNewFile(
-                        e.target.files && e.target.files[0]
-                          ? e.target.files[0]
-                          : null
-                      )
-                    }
-                    style={{ fontSize: 11, flex: "1 1 150px" }}
-                  />
-                  <input
-                    type="text"
-                    placeholder="Caption (optional)"
-                    value={newCaption}
-                    onChange={(e) => setNewCaption(e.target.value)}
-                    style={smallInput}
-                  />
-                  <input
-                    type="date"
-                    value={newMemoryDate}
-                    onChange={(e) => setNewMemoryDate(e.target.value)}
-                    style={smallInput}
-                  />
-                  <button type="submit" style={smallUploadBtn}>
-                    Add to list
-                  </button>
-                </div>
-              </form>
-
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  marginTop: 4,
-                  paddingInline: 2,
-                }}
-              >
-                <button
-                  type="button"
-                  style={{
-                    border: "none",
-                    background: "transparent",
-                    fontSize: 12,
-                    color: "#2563eb",
-                    textDecoration: "underline",
-                    cursor: "pointer",
-                    padding: 0,
-                  }}
-                  onClick={() => {
-                    setShowMemoriesModal(false);
-                    navigate("/photo-memories");
-                  }}
-                >
-                  Open my gallery →
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handleSaveAllMemories}
-                  disabled={savingAll}
-                  style={{
-                    border: "none",
-                    borderRadius: 999,
-                    padding: "6px 12px",
-                    backgroundColor: savingAll ? "#9ca3af" : "#2563eb",
-                    color: "#f9fafb",
-                    fontSize: 12,
-                    fontWeight: 600,
-                    cursor: savingAll ? "default" : "pointer",
-                    boxShadow: "0 4px 10px rgba(37, 99, 235, 0.3)",
-                  }}
-                >
-                  {savingAll ? "Saving..." : "Save all"}
-                </button>
-              </div>
-
-              {memoriesError && (
-                <div style={{ marginTop: 4, fontSize: 11, color: "#b91c1c" }}>
-                  {memoriesError}
-                </div>
-              )}
-
-              <div style={memoriesGrid}>
-                {pendingMemories.length === 0 ? (
-                  <div
-                    style={{
-                      fontSize: 12,
-                      color: "#6b7280",
-                      gridColumn: "1 / -1",
-                      textAlign: "center",
-                      paddingTop: 8,
-                    }}
-                  >
-                    No photos in this list yet. Add a happy moment above 🌱
-                  </div>
-                ) : (
-                  pendingMemories.map((m) => (
-                    <div key={m.id} style={memoriesCard}>
-                      <div style={memoriesImgWrapper}>
-                        <img
-                          src={m.previewUrl}
-                          alt={m.caption || "Happy memory"}
-                          style={memoriesImg}
-                        />
-                      </div>
-                      <div style={memoriesBody}>
-                        <div style={tinyLabel}>Caption</div>
-                        <input
-                          type="text"
-                          value={m.caption}
-                          onChange={(e) =>
-                            handlePendingFieldChange(
-                              m.id,
-                              "caption",
-                              e.target.value
-                            )
-                          }
-                          style={{ ...tinyInput, height: 24 }}
-                        />
-
-                        <div style={tinyLabel}>Date</div>
-                        <input
-                          type="date"
-                          value={m.memoryDate}
-                          onChange={(e) =>
-                            handlePendingFieldChange(
-                              m.id,
-                              "memoryDate",
-                              e.target.value
-                            )
-                          }
-                          style={tinyInput}
-                        />
-
-                        <div style={tinyButtonsRow}>
-                          <button
-                            type="button"
-                            style={{
-                              ...tinyBtn,
-                              backgroundColor: "#dc2626",
-                              color: "#f9fafb",
-                            }}
-                            onClick={() => handleRemovePendingMemory(m.id)}
-                          >
-                            Remove
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* 🎙️ Floating Mic Button → starts/stops Background Monitoring */}
         <button
           type="button"
           style={micBtnStyle}
           onClick={() => (isListening ? handleStopListening() : handleStartListening())}
-          aria-label="Background voice monitoring"
-          title={isListening ? "Stop listening" : "Start listening"}
+          aria-label="Record mood audio"
+          title={isListening ? "Stop recording" : "Start recording"}
+          disabled={isAnalyzingAudio}
         >
           {isListening ? "⏹️" : "🎙️"}
         </button>
 
-        {/* small feedback */}
-        {(voiceText || voiceError || lastAudioEvent) && (
+        {(voiceText || voiceError || lastAudioResult || isAnalyzingAudio) && (
           <div
             style={{
               position: "absolute",
@@ -1716,27 +1249,32 @@ const handleStopListening = async () => {
           >
             {isListening && (
               <div style={{ marginBottom: 6, opacity: 0.9 }}>
-                <strong>Status:</strong> Listening in background (notification is on)
+                <strong>Status:</strong> Recording from microphone...
               </div>
             )}
+
+            {isAnalyzingAudio && (
+              <div style={{ marginBottom: 6, opacity: 0.9 }}>
+                <strong>Status:</strong> Uploading and analyzing your audio...
+              </div>
+            )}
+
             {voiceText && (
               <div>
                 <strong>Audio:</strong> {voiceText}
               </div>
             )}
-            {lastAudioEvent && (
-              <div style={{ marginTop: 4, opacity: 0.85 }}>
-                <strong>Last event:</strong>{" "}
-                {lastAudioEvent.type} • {Math.round(lastAudioEvent.confidence * 100)}% •{" "}
-                {lastAudioEvent.ts}
+
+            {lastAudioResult?.ok && (
+              <div style={{ marginTop: 6, opacity: 0.9 }}>
+                <strong>Saved mood:</strong> {lastAudioResult.label_saved} • score{" "}
+                {lastAudioResult.score_saved}
               </div>
             )}
+
             {voiceError && (
               <div style={{ marginTop: 6, color: "#fecaca" }}>{voiceError}</div>
             )}
-            <div style={{ marginTop: 6, opacity: 0.75 }}>
-              Tip: tap the notification to return to Mendly.
-            </div>
           </div>
         )}
       </div>

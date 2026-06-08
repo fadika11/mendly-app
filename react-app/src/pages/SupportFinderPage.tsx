@@ -1,7 +1,10 @@
 // react-app/src/pages/SupportFinderPage.tsx
 import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { Capacitor } from "@capacitor/core";
+import { Geolocation } from "@capacitor/geolocation";
 import logo from "../assets/mendly-logo.jpg";
+import HappyPhotoMemoriesButton from "../components/HappyPhotoMemoriesButton";
 
 interface SupportLocation {
   id: string;
@@ -22,13 +25,13 @@ const SupportFinderPage: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [locations, setLocations] = useState<SupportLocation[]>([]);
   const [error, setError] = useState<string | null>(null);
-  
-  const isNative = (window as any).Capacitor?.isNativePlatform?.() ?? false;
-  const API_BASE =
-    isNative
-      ? "http://10.0.2.2:8000"                   // emulator → host machine
-      : (import.meta.env.VITE_API_URL as string | undefined) ??
-        "http://localhost:8000";
+
+  const isNative = Capacitor.isNativePlatform?.() ?? false;
+
+  const API_BASE = isNative
+    ? "http://10.0.2.2:8000"
+    : (import.meta.env.VITE_API_URL as string | undefined) ??
+      "http://localhost:8000";
 
   // ===== styles =====
   const screenStyle: React.CSSProperties = {
@@ -86,6 +89,7 @@ const SupportFinderPage: React.FC = () => {
     fontSize: 20,
     boxShadow: "0 8px 20px rgba(0,0,0,0.12)",
   };
+
   const backBtnStyle: React.CSSProperties = { ...iconBtn, left: 12 };
   const logoutBtnStyle: React.CSSProperties = { ...iconBtn, right: 12 };
 
@@ -115,6 +119,7 @@ const SupportFinderPage: React.FC = () => {
     alignItems: "center",
     justifyContent: "center",
   };
+
   const tinyLogoImgStyle: React.CSSProperties = {
     width: "130%",
     height: "130%",
@@ -162,16 +167,15 @@ const SupportFinderPage: React.FC = () => {
     background: "#fff",
   };
 
-const searchRowStyle: React.CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  gap: 8,
-  marginTop: 8,
-  justifyContent: "center",
-  alignItems: "center",   // ⬅️ center children horizontally
-  width: "100%",
-};
-
+  const searchRowStyle: React.CSSProperties = {
+    display: "flex",
+    flexDirection: "column",
+    gap: 8,
+    marginTop: 8,
+    justifyContent: "center",
+    alignItems: "center",
+    width: "100%",
+  };
 
   const primaryBtn: React.CSSProperties = {
     border: "none",
@@ -251,6 +255,7 @@ const searchRowStyle: React.CSSProperties = {
 
   const searchByCity = async () => {
     const trimmed = city.trim();
+
     if (!trimmed) {
       setError("Please enter a city name.");
       return;
@@ -264,11 +269,14 @@ const searchRowStyle: React.CSSProperties = {
       const res = await fetch(
         `${API_BASE}/api/support-locations?city=${encodeURIComponent(trimmed)}`
       );
+
       if (!res.ok) {
         throw new Error("Failed to fetch locations");
       }
+
       const data: SupportLocation[] = await res.json();
       setLocations(data);
+
       if (data.length === 0) {
         setError("No results found for this city.");
       }
@@ -279,71 +287,101 @@ const searchRowStyle: React.CSSProperties = {
     }
   };
 
-  const useCurrentLocation = () => {
-    if (!navigator.geolocation) {
-      setError("Your device does not support location, please type a city.");
-      return;
+  const fetchLocationsByCoordinates = async (latitude: number, longitude: number) => {
+    const res = await fetch(
+      `${API_BASE}/api/support-locations?lat=${latitude}&lng=${longitude}`
+    );
+
+    if (!res.ok) {
+      throw new Error("Failed to fetch locations");
     }
 
+    const data: SupportLocation[] = await res.json();
+    setLocations(data);
+
+    if (data.length === 0) {
+      setError("No nearby mental health services were found.");
+    }
+  };
+
+  const useCurrentLocation = async () => {
     setError(null);
     setLoading(true);
     setLocations([]);
 
-    let finished = false;
+    try {
+      let latitude: number;
+      let longitude: number;
 
-    const stopLoadingWithError = (msg: string) => {
-      if (finished) return;
-      finished = true;
-      setError(msg);
-      setLoading(false);
-    };
+      if (isNative) {
+        const permission = await Geolocation.requestPermissions();
 
-    // Manual safety timeout – covers cases where Electron never calls success/error
-    const manualTimer = window.setTimeout(() => {
-      console.warn("Geolocation manual timeout – falling back to city search.");
-      stopLoadingWithError(
-        "We couldn't access your location. You can type a city name instead."
-      );
-    }, 60000); // 8 seconds
+        const locationPermission = (permission as any).location;
+        const coarsePermission = (permission as any).coarseLocation;
 
-    navigator.geolocation.getCurrentPosition(
-      async (pos) => {
-        if (finished) return;
-        finished = true;
-        window.clearTimeout(manualTimer);
-
-        try {
-          const { latitude, longitude } = pos.coords;
-          const res = await fetch(
-            `${API_BASE}/api/support-locations?lat=${latitude}&lng=${longitude}`
+        if (
+          locationPermission === "denied" &&
+          (!coarsePermission || coarsePermission === "denied")
+        ) {
+          setError(
+            "Mendly does not have permission to use your location. Please allow location access from your phone settings, then try again."
           );
-          if (!res.ok) {
-            throw new Error("Failed to fetch locations");
-          }
-          const data: SupportLocation[] = await res.json();
-          setLocations(data);
-          if (data.length === 0) {
-            setError("No nearby mental health services were found.");
-          }
-        } catch (e: any) {
-          setError(e?.message || "Error loading locations.");
-        } finally {
-          setLoading(false);
+          return;
         }
-      },
-      (err) => {
-        console.error("Geolocation error:", err.code, err.message);
-        window.clearTimeout(manualTimer);
-        stopLoadingWithError(
-          "We couldn't access your location. You can type a city name instead."
-        );
-      },
-      {
-        enableHighAccuracy: false,
-        timeout: 6000,   // browser may respect this; Electron sometimes doesn't
-        maximumAge: 0,
+
+        const position = await Geolocation.getCurrentPosition({
+          enableHighAccuracy: true,
+          timeout: 15000,
+          maximumAge: 0,
+        });
+
+        latitude = position.coords.latitude;
+        longitude = position.coords.longitude;
+      } else {
+        if (!navigator.geolocation) {
+          setError("Your browser does not support location services.");
+          return;
+        }
+
+        const position = await new Promise<any>((resolve, reject) => {
+          navigator.geolocation.getCurrentPosition(resolve, reject, {
+            enableHighAccuracy: true,
+            timeout: 15000,
+            maximumAge: 0,
+          });
+        });
+
+        latitude = position.coords.latitude;
+        longitude = position.coords.longitude;
       }
-    );
+
+      await fetchLocationsByCoordinates(latitude, longitude);
+    } catch (err: any) {
+      console.error("Current location error:", err);
+
+      const message = String(err?.message || err || "").toLowerCase();
+
+      if (
+        message.includes("permission") ||
+        message.includes("denied") ||
+        message.includes("disabled")
+      ) {
+        setError(
+          "Mendly cannot use your current location. Please enable location permission for Mendly in your phone settings."
+        );
+      } else if (
+        message.includes("timeout") ||
+        message.includes("location unavailable")
+      ) {
+        setError(
+          "Could not get your current location. Please make sure GPS/location is enabled and try again."
+        );
+      } else {
+        setError("Could not use your current location. Please try again.");
+      }
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -368,6 +406,7 @@ const searchRowStyle: React.CSSProperties = {
               </span>
               Mendly App
             </div>
+
             <span style={headerTitleStyle}>Find Support</span>
           </div>
 
@@ -391,6 +430,7 @@ const searchRowStyle: React.CSSProperties = {
           {/* search card */}
           <div style={cardStyle}>
             <div style={labelStyle}>Find mental health support near you</div>
+
             <p style={{ fontSize: 13, color: "#374151", marginBottom: 6 }}>
               You can type any city or use your current location. We’ll show
               clinics and professionals that may offer psychological help.
@@ -403,6 +443,7 @@ const searchRowStyle: React.CSSProperties = {
                 value={city}
                 onChange={(e) => setCity(e.target.value)}
               />
+
               <button
                 type="button"
                 style={{
@@ -536,6 +577,8 @@ const searchRowStyle: React.CSSProperties = {
             <div style={{ fontSize: 22 }}>👤</div>
             <div>Profile</div>
           </button>
+
+          <HappyPhotoMemoriesButton navItemStyle={navItemStyle} />
 
           <button
             type="button"

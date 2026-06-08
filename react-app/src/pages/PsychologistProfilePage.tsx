@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import logo from "../assets/mendly-logo.jpg";
 import { API_BASE, changePassword } from "../api/auth";
+import PsyAvailabilityButton from "../components/PsyAvailabilityButton";
 
 type MeResponse = {
   user_id: string;
@@ -1003,6 +1004,8 @@ const PsychologistProfilePage: React.FC = () => {
             <span style={{ fontSize: 20 }}>🏠</span>
             <span>Home</span>
           </button>
+
+          <PsyAvailabilityButton style={navItemStyle} />
 
           <button type="button" style={navItemStyle} onClick={logout}>
             <span style={{ fontSize: 20 }}>🚪</span>

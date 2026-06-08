@@ -3,7 +3,8 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import logo from "../assets/mendly-logo.jpg";
 import thankYouImg from "../assets/thank-you.png";
-import { API_BASE } from "../api/auth"; // ✅ uses 10.0.2.2 on native (emulator)
+import { API_BASE } from "../api/auth";
+import HappyPhotoMemoriesButton from "../components/HappyPhotoMemoriesButton";
 
 // ================== TYPES ==================
 type PsychologistProfile = {
@@ -23,7 +24,6 @@ type Psychologist = {
 
   psychologist_profile?: PsychologistProfile | null;
 
-  // fallback (flat)
   specialty?: string | null;
   workplace?: string | null;
   city?: string | null;
@@ -36,7 +36,6 @@ type PsychologistPublic = {
   user_id: string;
   username: string;
   email?: string | null;
-
   specialty?: string | null;
   workplace?: string | null;
   city?: string | null;
@@ -45,7 +44,21 @@ type PsychologistPublic = {
   license_number?: string | null;
 };
 
-type Q = { key: string; label: string; placeholder?: string };
+type AvailabilitySlot = {
+  slot_id: string;
+  psychologist_user_id: string;
+  start_at: string;
+  end_at: string | null;
+  is_booked: boolean;
+  appointment_id: string | null;
+  created_at: string | null;
+};
+
+type Q = {
+  key: string;
+  label: string;
+  placeholder?: string;
+};
 
 // ================== HELPERS ==================
 const safe = (v?: string | null) => (v && v.trim() ? v : "—");
@@ -64,6 +77,7 @@ const getProfileFields = (p: Psychologist) => {
   const workplace = prof?.workplace ?? p.workplace ?? "";
   const bio = prof?.bio ?? p.bio ?? "";
   const years = prof?.years_experience ?? p.years_experience ?? null;
+
   return { specialty, city, workplace, bio, years };
 };
 
@@ -71,6 +85,7 @@ const initialsFromName = (name: string) => {
   const parts = (name || "").trim().split(/\s+/).filter(Boolean);
   const a = parts[0]?.[0] ?? "";
   const b = parts.length > 1 ? parts[parts.length - 1]?.[0] : "";
+
   return (a + b).toUpperCase() || "P";
 };
 
@@ -85,29 +100,49 @@ const PsychologistsDirectoryPage: React.FC = () => {
   const [items, setItems] = useState<Psychologist[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // ✅ Search filters locally
   const [q, setQ] = useState("");
 
-  // ================== POPUP STATE ==================
   const [profileOpen, setProfileOpen] = useState(false);
   const [intakeOpen, setIntakeOpen] = useState(false);
-  const [chooseOpen, setChooseOpen] = useState(false); // ✅ new: date/time popup
+  const [chooseOpen, setChooseOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  // profile popup data
   const [profileItem, setProfileItem] = useState<PsychologistPublic | null>(null);
   const [profileLoading, setProfileLoading] = useState(false);
   const [profileErr, setProfileErr] = useState<string | null>(null);
 
-  // intake popup state
   const questions: Q[] = useMemo(
     () => [
-      { key: "main_issue", label: "What brings you here today?", placeholder: "Describe briefly…" },
-      { key: "goals", label: "What do you want to achieve in therapy?", placeholder: "Your goals…" },
-      { key: "sleep", label: "How is your sleep lately?", placeholder: "Good / average / poor…" },
-      { key: "stress", label: "Current stress level (0-10)?", placeholder: "0-10" },
-      { key: "history", label: "Have you tried therapy before?", placeholder: "Yes/No + details…" },
-      { key: "notes", label: "Anything important the psychologist should know?", placeholder: "Optional…" },
+      {
+        key: "main_issue",
+        label: "What brings you here today?",
+        placeholder: "Describe briefly…",
+      },
+      {
+        key: "goals",
+        label: "What do you want to achieve in therapy?",
+        placeholder: "Your goals…",
+      },
+      {
+        key: "sleep",
+        label: "How is your sleep lately?",
+        placeholder: "Good / average / poor…",
+      },
+      {
+        key: "stress",
+        label: "Current stress level (0-10)?",
+        placeholder: "0-10",
+      },
+      {
+        key: "history",
+        label: "Have you tried therapy before?",
+        placeholder: "Yes/No + details…",
+      },
+      {
+        key: "notes",
+        label: "Anything important the psychologist should know?",
+        placeholder: "Optional…",
+      },
     ],
     []
   );
@@ -118,21 +153,24 @@ const PsychologistsDirectoryPage: React.FC = () => {
   const [intakeSaving, setIntakeSaving] = useState(false);
   const [intakeErr, setIntakeErr] = useState<string | null>(null);
 
-  // ✅ after intake: create appointment request in a popup
   const [intakeId, setIntakeId] = useState<string | null>(null);
   const [date, setDate] = useState("");
-  const [time, setTime] = useState("");
+  const [availableSlots, setAvailableSlots] = useState<AvailabilitySlot[]>([]);
+  const [selectedSlotId, setSelectedSlotId] = useState("");
+  const [slotsLoading, setSlotsLoading] = useState(false);
   const [apptSaving, setApptSaving] = useState(false);
   const [apptErr, setApptErr] = useState<string | null>(null);
 
-  // ✅ thank-you screen like CheckIn
   const [showThanks, setShowThanks] = useState(false);
 
-  // lock background scroll if any popup is open
   useEffect(() => {
     const anyOpen = profileOpen || intakeOpen || chooseOpen;
     const prev = document.body.style.overflow;
-    if (anyOpen) document.body.style.overflow = "hidden";
+
+    if (anyOpen) {
+      document.body.style.overflow = "hidden";
+    }
+
     return () => {
       document.body.style.overflow = prev;
     };
@@ -148,7 +186,8 @@ const PsychologistsDirectoryPage: React.FC = () => {
     justifyContent: "center",
     alignItems: "stretch",
     backgroundColor: BLUE,
-    fontFamily: '"Poppins", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+    fontFamily:
+      '"Poppins", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
   };
 
   const phoneStyle: React.CSSProperties = {
@@ -451,7 +490,6 @@ const PsychologistsDirectoryPage: React.FC = () => {
     fontWeight: 650,
   };
 
-  // ================== MODAL STYLES ==================
   const overlayStyle: React.CSSProperties = {
     position: "absolute",
     inset: 0,
@@ -515,7 +553,6 @@ const PsychologistsDirectoryPage: React.FC = () => {
     overflowY: "auto",
   };
 
-  // Profile popup styles
   const profileHero: React.CSSProperties = {
     background:
       "linear-gradient(135deg, rgba(53,101,175,0.14) 0%, rgba(244,197,143,0.28) 100%)",
@@ -636,7 +673,6 @@ const PsychologistsDirectoryPage: React.FC = () => {
     whiteSpace: "nowrap",
   };
 
-  // Intake popup styles
   const intakeCardStyle: React.CSSProperties = {
     width: "100%",
     backgroundColor: "rgba(255,255,255,0.45)",
@@ -731,7 +767,6 @@ const PsychologistsDirectoryPage: React.FC = () => {
     marginTop: 6,
   };
 
-  // ✅ Choose time popup styles
   const chooseCard: React.CSSProperties = {
     width: "100%",
     backgroundColor: "rgba(255,255,255,0.45)",
@@ -771,7 +806,6 @@ const PsychologistsDirectoryPage: React.FC = () => {
     color: "#111827",
   };
 
-  // ✅ Thank you screen (same idea as CheckIn)
   const thankScreenStyle: React.CSSProperties = {
     position: "relative",
     width: "100%",
@@ -817,10 +851,11 @@ const PsychologistsDirectoryPage: React.FC = () => {
         setLoading(false);
       }
     };
+
     run();
   }, []);
 
-  // ================== SEARCH (LOCAL FILTER) ==================
+  // ================== SEARCH ==================
   const rendered = useMemo(() => {
     const query = normalize(q);
     if (!query) return items;
@@ -829,6 +864,7 @@ const PsychologistsDirectoryPage: React.FC = () => {
 
     return items.filter((p) => {
       const { specialty, city, workplace, bio, years } = getProfileFields(p);
+
       const haystack = normalize(
         [
           p.username ?? "",
@@ -839,6 +875,7 @@ const PsychologistsDirectoryPage: React.FC = () => {
           years != null ? String(years) : "",
         ].join(" ")
       );
+
       return terms.every((t) => haystack.includes(t));
     });
   }, [items, q]);
@@ -855,7 +892,9 @@ const PsychologistsDirectoryPage: React.FC = () => {
   const resetChooseState = () => {
     setIntakeId(null);
     setDate("");
-    setTime("");
+    setAvailableSlots([]);
+    setSelectedSlotId("");
+    setSlotsLoading(false);
     setApptErr(null);
     setApptSaving(false);
   };
@@ -889,10 +928,12 @@ const PsychologistsDirectoryPage: React.FC = () => {
 
     try {
       const res = await fetch(`${API_BASE}/psychologists/${id}`);
+
       if (!res.ok) {
         const t = await res.text().catch(() => "");
         throw new Error(t || "Failed to load psychologist");
       }
+
       const data = (await res.json()) as PsychologistPublic;
       setProfileItem(data);
     } catch (e: any) {
@@ -920,7 +961,9 @@ const PsychologistsDirectoryPage: React.FC = () => {
     setProfileOpen(false);
 
     setDate("");
-    setTime("");
+    setAvailableSlots([]);
+    setSelectedSlotId("");
+    setSlotsLoading(false);
     setApptErr(null);
     setApptSaving(false);
   };
@@ -930,11 +973,14 @@ const PsychologistsDirectoryPage: React.FC = () => {
 
   const handleNext = () => {
     setIntakeErr(null);
+
     const v = current.trim();
+
     if (!v && qItem.key !== "notes") {
       setIntakeErr("Please answer before continuing.");
       return;
     }
+
     setAnswers((prev) => ({ ...prev, [qItem.key]: v }));
     setCurrent("");
     setStep((s) => Math.min(s + 1, questions.length - 1));
@@ -956,6 +1002,7 @@ const PsychologistsDirectoryPage: React.FC = () => {
 
     for (const qq of questions) {
       if (qq.key === "notes") continue;
+
       if (!String(finalAnswers[qq.key] ?? "").trim()) {
         setIntakeErr("Please answer all required questions.");
         return;
@@ -967,6 +1014,7 @@ const PsychologistsDirectoryPage: React.FC = () => {
       setIntakeErr(null);
 
       const token = localStorage.getItem("access_token");
+
       if (!token) {
         navigate("/login", { replace: true });
         return;
@@ -992,9 +1040,10 @@ const PsychologistsDirectoryPage: React.FC = () => {
       const data = await res.json();
       const created = data?.intake_id as string | undefined;
 
-      if (!created) throw new Error("Missing intake_id in response.");
+      if (!created) {
+        throw new Error("Missing intake_id in response.");
+      }
 
-      // ✅ open date/time popup (no routing)
       openChoosePopup(created);
     } catch (e: any) {
       setIntakeErr(e?.message || "Failed to submit. Please try again.");
@@ -1003,7 +1052,50 @@ const PsychologistsDirectoryPage: React.FC = () => {
     }
   };
 
-  // ================== APPOINTMENT REQUEST (DATE/TIME POPUP) ==================
+  // ================== LOAD AVAILABLE TIMES BY DATE ==================
+  useEffect(() => {
+    const loadAvailableSlots = async () => {
+      if (!chooseOpen || !selectedId || !date) {
+        setAvailableSlots([]);
+        setSelectedSlotId("");
+        return;
+      }
+
+      try {
+        setSlotsLoading(true);
+        setApptErr(null);
+        setSelectedSlotId("");
+
+        const params = new URLSearchParams({
+          psychologist_user_id: selectedId,
+          date,
+        });
+
+        const res = await fetch(`${API_BASE}/appointments/availability?${params.toString()}`);
+
+        if (!res.ok) {
+          const t = await res.text().catch(() => "");
+          throw new Error(t || "Failed to load available appointments.");
+        }
+
+        const data = (await res.json()) as AvailabilitySlot[];
+        setAvailableSlots(data);
+
+        if (data.length === 0) {
+          setApptErr("There are no available appointments on this day.");
+        }
+      } catch (e: any) {
+        setAvailableSlots([]);
+        setApptErr(e?.message || "Failed to load available appointments.");
+      } finally {
+        setSlotsLoading(false);
+      }
+    };
+
+    loadAvailableSlots();
+  }, [chooseOpen, selectedId, date]);
+
+  // ================== APPOINTMENT REQUEST ==================
   const submitAppointment = async () => {
     setApptErr(null);
 
@@ -1011,23 +1103,31 @@ const PsychologistsDirectoryPage: React.FC = () => {
       setApptErr("Missing psychologist id.");
       return;
     }
+
     if (!intakeId) {
       setApptErr("Missing intake id. Please restart booking.");
       return;
     }
-    if (!date || !time) {
-      setApptErr("Please pick date and time.");
+
+    if (!date) {
+      setApptErr("Please pick a date.");
       return;
     }
 
-    // local time -> ISO
-    const iso = new Date(`${date}T${time}:00`).toISOString();
+    if (!selectedSlotId) {
+      setApptErr("Please choose one of the available appointment times.");
+      return;
+    }
 
     try {
       setApptSaving(true);
 
       const token = localStorage.getItem("access_token");
-      if (!token) return navigate("/login", { replace: true });
+
+      if (!token) {
+        navigate("/login", { replace: true });
+        return;
+      }
 
       const res = await fetch(`${API_BASE}/appointments`, {
         method: "POST",
@@ -1038,7 +1138,7 @@ const PsychologistsDirectoryPage: React.FC = () => {
         body: JSON.stringify({
           psychologist_user_id: selectedId,
           intake_id: intakeId,
-          start_at: iso,
+          availability_slot_id: selectedSlotId,
         }),
       });
 
@@ -1047,7 +1147,6 @@ const PsychologistsDirectoryPage: React.FC = () => {
         throw new Error(t || "Failed to request appointment.");
       }
 
-      // ✅ show thank-you image then go to journey
       closeAllPopups();
       setShowThanks(true);
 
@@ -1070,7 +1169,12 @@ const PsychologistsDirectoryPage: React.FC = () => {
             <img
               src={thankYouImg}
               alt="Thank you"
-              style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+              style={{
+                width: "100%",
+                height: "100%",
+                objectFit: "cover",
+                display: "block",
+              }}
             />
 
             <div style={dotsWrapperStyle}>
@@ -1081,11 +1185,11 @@ const PsychologistsDirectoryPage: React.FC = () => {
 
             <style>
               {`
-              @keyframes dotPulse {
-                0%, 80%, 100% { transform: scale(0.6); opacity: 0.3; }
-                40% { transform: scale(1); opacity: 1; }
-              }
-            `}
+                @keyframes dotPulse {
+                  0%, 80%, 100% { transform: scale(0.6); opacity: 0.3; }
+                  40% { transform: scale(1); opacity: 1; }
+                }
+              `}
             </style>
           </div>
         </div>
@@ -1100,7 +1204,13 @@ const PsychologistsDirectoryPage: React.FC = () => {
         {/* HEADER */}
         <div style={headerStyle}>
           <div style={headerRow}>
-            <button type="button" style={iconBtn} onClick={() => navigate("/journey")} aria-label="Home" title="Home">
+            <button
+              type="button"
+              style={iconBtn}
+              onClick={() => navigate("/journey")}
+              aria-label="Home"
+              title="Home"
+            >
               🏠
             </button>
 
@@ -1108,6 +1218,7 @@ const PsychologistsDirectoryPage: React.FC = () => {
               <span style={tinyLogoStyle}>
                 <img src={logo} alt="Mendly logo" style={tinyLogoImgStyle} />
               </span>
+
               <div style={brandTextWrap}>
                 <div style={brandTitle}>Mendly App</div>
                 <div style={brandSubtitle}>Find a psychologist</div>
@@ -1133,12 +1244,20 @@ const PsychologistsDirectoryPage: React.FC = () => {
         {/* CONTENT */}
         <div style={contentStyle}>
           <div style={heroCard}>
-            <p style={heroText}>Search by name, specialty, city, workplace, years of experience or bio.</p>
+            <p style={heroText}>
+              Search by name, specialty, city, workplace, years of experience or bio.
+            </p>
 
             <div style={searchWrap}>
               <div style={searchInputWrap}>
                 <span style={searchIcon}>🔎</span>
-                <input style={searchStyle} placeholder="Search..." value={q} onChange={(e) => setQ(e.target.value)} />
+
+                <input
+                  style={searchStyle}
+                  placeholder="Search..."
+                  value={q}
+                  onChange={(e) => setQ(e.target.value)}
+                />
               </div>
 
               <button
@@ -1155,7 +1274,9 @@ const PsychologistsDirectoryPage: React.FC = () => {
           </div>
 
           {loading ? (
-            <div style={{ color: CREAM, fontWeight: 750, textAlign: "center" }}>Loading...</div>
+            <div style={{ color: CREAM, fontWeight: 750, textAlign: "center" }}>
+              Loading...
+            </div>
           ) : rendered.length === 0 ? (
             <div style={{ color: CREAM, fontWeight: 750, textAlign: "center" }}>
               No psychologists found for “{q.trim()}”.
@@ -1169,11 +1290,14 @@ const PsychologistsDirectoryPage: React.FC = () => {
                   <div key={p.user_id} style={card}>
                     <div style={topRow}>
                       <div style={avatar}>{initialsFromName(p.username)}</div>
+
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <h3 style={nameStyle}>{p.username}</h3>
+
                         <div style={metaStyle}>
                           {safe(specialty)} • {safe(city)}
                         </div>
+
                         <div style={subMeta}>
                           {workplace?.trim() ? workplace : "—"}
                           {years != null ? ` • ${years} yrs` : ""}
@@ -1184,11 +1308,19 @@ const PsychologistsDirectoryPage: React.FC = () => {
                     {bio?.trim() ? <div style={bioStyle}>{bio}</div> : null}
 
                     <div style={btnRowSmall}>
-                      <button type="button" style={btnSecondary} onClick={() => openProfilePopup(p.user_id)}>
+                      <button
+                        type="button"
+                        style={btnSecondary}
+                        onClick={() => openProfilePopup(p.user_id)}
+                      >
                         View Profile
                       </button>
 
-                      <button type="button" style={btnPrimary} onClick={() => openIntakePopup(p.user_id)}>
+                      <button
+                        type="button"
+                        style={btnPrimary}
+                        onClick={() => openIntakePopup(p.user_id)}
+                      >
                         Book an Appointment
                       </button>
                     </div>
@@ -1201,42 +1333,70 @@ const PsychologistsDirectoryPage: React.FC = () => {
 
         {/* BOTTOM NAV */}
         <div style={bottomNavStyle}>
-          <button type="button" style={navItemStyle} onClick={() => navigate("/profile")} aria-label="Profile">
+          <button
+            type="button"
+            style={navItemStyle}
+            onClick={() => navigate("/profile")}
+            aria-label="Profile"
+          >
             <div style={{ fontSize: 22 }}>👤</div>
             <div>Profile</div>
           </button>
 
-          <button type="button" style={navItemStyle} onClick={() => navigate("/chat")} aria-label="AI Chat">
+          <HappyPhotoMemoriesButton navItemStyle={navItemStyle} />
+
+          <button
+            type="button"
+            style={navItemStyle}
+            onClick={() => navigate("/chat")}
+            aria-label="AI Chat"
+          >
             <div style={{ fontSize: 22 }}>💬</div>
             <div>Ai Chat</div>
           </button>
         </div>
 
-        {/* ================== PROFILE POPUP ================== */}
+        {/* PROFILE POPUP */}
         {profileOpen && (
           <div style={overlayStyle} onClick={closeAllPopups} role="dialog" aria-modal="true">
             <div style={modalStyle} onClick={(e) => e.stopPropagation()}>
               <div style={modalHeaderStyle}>
                 <div style={modalTitleStyle}>Psychologist Profile</div>
-                <button type="button" style={closeBtnStyle} onClick={closeAllPopups} aria-label="Close">
+
+                <button
+                  type="button"
+                  style={closeBtnStyle}
+                  onClick={closeAllPopups}
+                  aria-label="Close"
+                >
                   ✕
                 </button>
               </div>
 
               <div style={modalBodyStyle}>
                 {profileLoading ? (
-                  <div style={{ textAlign: "center", fontWeight: 750, color: "#3565AF" }}>Loading...</div>
+                  <div style={{ textAlign: "center", fontWeight: 750, color: "#3565AF" }}>
+                    Loading...
+                  </div>
                 ) : profileErr ? (
-                  <div style={{ textAlign: "center", fontWeight: 750, color: "#7f1d1d" }}>{profileErr}</div>
+                  <div style={{ textAlign: "center", fontWeight: 750, color: "#7f1d1d" }}>
+                    {profileErr}
+                  </div>
                 ) : !profileItem ? (
-                  <div style={{ textAlign: "center", fontWeight: 750, color: "#3565AF" }}>Not found.</div>
+                  <div style={{ textAlign: "center", fontWeight: 750, color: "#3565AF" }}>
+                    Not found.
+                  </div>
                 ) : (
                   <>
                     <div style={profileHero}>
                       <div style={heroTopRow}>
-                        <div style={heroAvatar}>{initialsFromName(profileItem.username || "P")}</div>
+                        <div style={heroAvatar}>
+                          {initialsFromName(profileItem.username || "P")}
+                        </div>
+
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <h2 style={heroName}>{safe(profileItem.username)}</h2>
+
                           <div style={heroSub}>
                             {safe(profileItem.specialty)} • {safe(profileItem.city)}
                           </div>
@@ -1244,7 +1404,10 @@ const PsychologistsDirectoryPage: React.FC = () => {
                       </div>
 
                       <div style={chipsRow}>
-                        <div style={chip}>🏥 {profileItem.workplace?.trim() ? profileItem.workplace : "—"}</div>
+                        <div style={chip}>
+                          🏥 {profileItem.workplace?.trim() ? profileItem.workplace : "—"}
+                        </div>
+
                         <div style={chip}>
                           ⭐{" "}
                           {profileItem.years_experience != null
@@ -1273,7 +1436,9 @@ const PsychologistsDirectoryPage: React.FC = () => {
                       <div style={infoBox}>
                         <div style={infoLabel}>Experience</div>
                         <div style={infoValue}>
-                          {profileItem.years_experience != null ? profileItem.years_experience : "—"}
+                          {profileItem.years_experience != null
+                            ? profileItem.years_experience
+                            : "—"}
                         </div>
                       </div>
                     </div>
@@ -1288,7 +1453,11 @@ const PsychologistsDirectoryPage: React.FC = () => {
 
               {!profileLoading && !profileErr && profileItem ? (
                 <div style={stickyFooter}>
-                  <button type="button" style={ctaBtn} onClick={() => openIntakePopup(profileItem.user_id)}>
+                  <button
+                    type="button"
+                    style={ctaBtn}
+                    onClick={() => openIntakePopup(profileItem.user_id)}
+                  >
                     Book an appointment
                   </button>
                 </div>
@@ -1297,13 +1466,19 @@ const PsychologistsDirectoryPage: React.FC = () => {
           </div>
         )}
 
-        {/* ================== INTAKE POPUP ================== */}
+        {/* INTAKE POPUP */}
         {intakeOpen && (
           <div style={overlayStyle} onClick={closeAllPopups} role="dialog" aria-modal="true">
             <div style={modalStyle} onClick={(e) => e.stopPropagation()}>
               <div style={modalHeaderStyle}>
                 <div style={modalTitleStyle}>Quick Intake Questions</div>
-                <button type="button" style={closeBtnStyle} onClick={closeAllPopups} aria-label="Close">
+
+                <button
+                  type="button"
+                  style={closeBtnStyle}
+                  onClick={closeAllPopups}
+                  aria-label="Close"
+                >
                   ✕
                 </button>
               </div>
@@ -1311,6 +1486,7 @@ const PsychologistsDirectoryPage: React.FC = () => {
               <div style={modalBodyStyle}>
                 <div style={intakeCardStyle}>
                   <p style={qStyle}>{qItem.label}</p>
+
                   {qItem.placeholder ? <div style={hintStyle}>{qItem.placeholder}</div> : null}
 
                   <div style={inputWrap}>
@@ -1339,18 +1515,36 @@ const PsychologistsDirectoryPage: React.FC = () => {
                     </button>
 
                     {step < questions.length - 1 ? (
-                      <button type="button" style={primaryBtn} onClick={handleNext} disabled={intakeSaving}>
+                      <button
+                        type="button"
+                        style={primaryBtn}
+                        onClick={handleNext}
+                        disabled={intakeSaving}
+                      >
                         Next
                       </button>
                     ) : (
-                      <button type="button" style={primaryBtn} onClick={handleFinish} disabled={intakeSaving}>
+                      <button
+                        type="button"
+                        style={primaryBtn}
+                        onClick={handleFinish}
+                        disabled={intakeSaving}
+                      >
                         {intakeSaving ? "Submitting..." : "Finish & Choose Time"}
                       </button>
                     )}
                   </div>
                 </div>
 
-                <div style={{ marginTop: 10, fontSize: 12, fontWeight: 650, color: "#3565AF", textAlign: "center" }}>
+                <div
+                  style={{
+                    marginTop: 10,
+                    fontSize: 12,
+                    fontWeight: 650,
+                    color: "#3565AF",
+                    textAlign: "center",
+                  }}
+                >
                   Your answers will be submitted when you finish.
                 </div>
               </div>
@@ -1358,13 +1552,19 @@ const PsychologistsDirectoryPage: React.FC = () => {
           </div>
         )}
 
-        {/* ================== CHOOSE DATE/TIME POPUP (NEW) ================== */}
+        {/* CHOOSE DATE/TIME POPUP */}
         {chooseOpen && (
           <div style={overlayStyle} onClick={closeAllPopups} role="dialog" aria-modal="true">
             <div style={modalStyle} onClick={(e) => e.stopPropagation()}>
               <div style={modalHeaderStyle}>
                 <div style={modalTitleStyle}>Choose Date & Time</div>
-                <button type="button" style={closeBtnStyle} onClick={closeAllPopups} aria-label="Close">
+
+                <button
+                  type="button"
+                  style={closeBtnStyle}
+                  onClick={closeAllPopups}
+                  aria-label="Close"
+                >
                   ✕
                 </button>
               </div>
@@ -1372,6 +1572,7 @@ const PsychologistsDirectoryPage: React.FC = () => {
               <div style={modalBodyStyle}>
                 <div style={chooseCard}>
                   <div style={chooseLabel}>Date</div>
+
                   <div style={pill}>
                     <input
                       style={inputStyle}
@@ -1381,29 +1582,78 @@ const PsychologistsDirectoryPage: React.FC = () => {
                     />
                   </div>
 
-                  <div style={chooseLabel}>Time</div>
+                  <div style={chooseLabel}>Available times</div>
+
                   <div style={pill}>
-                    <input
-                      style={inputStyle}
-                      type="time"
-                      value={time}
-                      onChange={(e) => setTime(e.target.value)}
-                    />
+                    {slotsLoading ? (
+                      <div style={{ color: "#3565AF", fontWeight: 800 }}>
+                        Loading available times...
+                      </div>
+                    ) : availableSlots.length === 0 ? (
+                      <div style={{ color: "#7f1d1d", fontWeight: 800 }}>
+                        {date
+                          ? "There are no available appointments on this day."
+                          : "Choose a date first."}
+                      </div>
+                    ) : (
+                      <select
+                        style={inputStyle}
+                        value={selectedSlotId}
+                        onChange={(e) => setSelectedSlotId(e.target.value)}
+                      >
+                        <option value="">Choose available time</option>
+
+                        {availableSlots.map((slot) => {
+                          const d = new Date(slot.start_at);
+                          const label = Number.isNaN(d.getTime())
+                            ? slot.start_at
+                            : d.toLocaleTimeString([], {
+                                hour: "2-digit",
+                                minute: "2-digit",
+                              });
+
+                          return (
+                            <option key={slot.slot_id} value={slot.slot_id}>
+                              {label}
+                            </option>
+                          );
+                        })}
+                      </select>
+                    )}
                   </div>
 
                   {apptErr ? <div style={errorStyle}>{apptErr}</div> : null}
 
                   <div style={btnRow}>
-                    <button type="button" style={secondaryBtn} onClick={() => setChooseOpen(false)} disabled={apptSaving}>
+                    <button
+                      type="button"
+                      style={secondaryBtn}
+                      onClick={() => setChooseOpen(false)}
+                      disabled={apptSaving}
+                    >
                       Back
                     </button>
-                    <button type="button" style={primaryBtn} onClick={submitAppointment} disabled={apptSaving}>
+
+                    <button
+                      type="button"
+                      style={primaryBtn}
+                      onClick={submitAppointment}
+                      disabled={apptSaving || slotsLoading || !selectedSlotId}
+                    >
                       {apptSaving ? "Submitting..." : "Request Appointment"}
                     </button>
                   </div>
                 </div>
 
-                <div style={{ marginTop: 10, fontSize: 12, fontWeight: 650, color: "#3565AF", textAlign: "center" }}>
+                <div
+                  style={{
+                    marginTop: 10,
+                    fontSize: 12,
+                    fontWeight: 650,
+                    color: "#3565AF",
+                    textAlign: "center",
+                  }}
+                >
                   After submitting, you’ll be redirected to Journey.
                 </div>
               </div>

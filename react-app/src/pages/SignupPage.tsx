@@ -1,84 +1,94 @@
 import React, { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { signup } from "../api/auth";
-import { signupPsychologist } from "../api/auth";
+import { signup, signupPsychologist } from "../api/auth";
 import logo from "../assets/mendly-logo.jpg";
 
 const SignupPage: React.FC = () => {
   const [username, setUsername] = useState("");
   const [age, setAge] = useState<number | "">("");
-  const [gender, setGender] = useState<number>(0); // 0 = prefer not to say
+  const [gender, setGender] = useState<number>(0);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [role, setRole] = useState<"regular" | "psychologist">("regular");
 
-  // psychologist fields
-  const [specialty, setSpecialty] = useState("");
-  const [workplace, setWorkplace] = useState("");
-  const [city, setCity] = useState("");
+  const [licenseNumber, setLicenseNumber] = useState("");
 
   const navigate = useNavigate();
 
+  const getSignupErrorMessage = (err: any) => {
+    const detail = err?.response?.data?.detail;
+
+    if (typeof detail === "string") return detail;
+
+    if (Array.isArray(detail)) {
+      return detail.map((d: any) => d?.msg || JSON.stringify(d)).join(", ");
+    }
+
+    if (detail && typeof detail === "object") return JSON.stringify(detail);
+
+    return err?.message || "Signup failed. Please try again.";
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    if (loading) return;
+
     setError(null);
+
+    const cleanUsername = username.trim();
+    const cleanEmail = email.trim();
+    const cleanPassword = password.trim();
+
+    if (!cleanUsername || !cleanEmail || !cleanPassword) {
+      setError("Please fill username, email, and password.");
+      return;
+    }
+
+    if (role === "psychologist" && !licenseNumber.trim()) {
+      setError("License number is required for psychologist signup.");
+      return;
+    }
+
     setLoading(true);
 
     try {
       if (role === "regular") {
-  await signup({
-    username,
-    email,
-    password,
-    age: age === "" ? undefined : Number(age),
-    gender,
-  });
-  } else {
-  await signupPsychologist({
-    username,
-    email,
-    password,
-    age: age === "" ? undefined : Number(age),
-    gender,
-    specialty,
-    workplace,
-    city,
-  });
-}
-
-      alert("Account created successfully, you can login now.");
-      navigate("/login");
-    } catch (err: any) {
-      console.error("Signup error:", err);
-
-      let message = "Signup failed";
-      const detail = err?.response?.data?.detail;
-
-      if (typeof detail === "string") {
-        message = detail;
-      } else if (Array.isArray(detail)) {
-        message = detail
-          .map((d: any) => d?.msg || JSON.stringify(d))
-          .join(", ");
-      } else if (detail && typeof detail === "object") {
-        message = JSON.stringify(detail);
+        await signup({
+          username: cleanUsername,
+          email: cleanEmail,
+          password: cleanPassword,
+          age: age === "" ? undefined : Number(age),
+          gender,
+        });
+      } else {
+        await signupPsychologist({
+          username: cleanUsername,
+          email: cleanEmail,
+          password: cleanPassword,
+          age: age === "" ? undefined : Number(age),
+          gender,
+          license_number: licenseNumber.trim(),
+        });
       }
 
-      setError(message);
+      navigate("/login", { replace: true });
+    } catch (err: any) {
+      console.error("Signup error:", err);
+      setError(getSignupErrorMessage(err));
     } finally {
       setLoading(false);
     }
   };
 
-  // ====== SHARED COLORS (same as Login) ======
   const BLUE = "#6BA7E6";
   const CREAM = "#f5e9d9";
   const BUTTON = "#F4C58F";
   const BUTTON_TEXT = "#3565AF";
 
-  // ====== LAYOUT STYLES ======
   const screenStyle: React.CSSProperties = {
     height: "100vh",
     width: "100vw",
@@ -118,7 +128,6 @@ const SignupPage: React.FC = () => {
     overflow: "hidden",
   };
 
-  // round home icon button in the header
   const homeIconButtonStyle: React.CSSProperties = {
     position: "absolute",
     top: 16,
@@ -153,7 +162,6 @@ const SignupPage: React.FC = () => {
     backgroundRepeat: "repeat-x",
   };
 
-  // LOGO as background image in a circle
   const logoCircleStyle: React.CSSProperties = {
     width: 120,
     height: 120,
@@ -207,6 +215,7 @@ const SignupPage: React.FC = () => {
     paddingBlock: 9,
     display: "flex",
     alignItems: "center",
+    boxSizing: "border-box",
   };
 
   const inputStyle: React.CSSProperties = {
@@ -235,21 +244,29 @@ const SignupPage: React.FC = () => {
   const buttonPillStyle: React.CSSProperties = {
     width: "100%",
     borderRadius: 999,
-    backgroundColor: BUTTON,
+    backgroundColor: loading ? "rgba(244,197,143,0.65)" : BUTTON,
     border: "none",
-    paddingBlock: 12,
+    paddingBlock: 13,
     fontSize: 16,
     fontWeight: 600,
     color: BUTTON_TEXT,
-    cursor: "pointer",
+    cursor: loading ? "not-allowed" : "pointer",
     marginTop: 8,
   };
 
   const errorStyle: React.CSSProperties = {
     marginTop: 6,
+    marginBottom: 8,
+    padding: "9px 11px",
+    borderRadius: 14,
+    backgroundColor: "rgba(127,29,29,0.22)",
+    border: "1px solid rgba(255,255,255,0.30)",
     fontSize: 12,
+    fontWeight: 700,
     color: CREAM,
     textAlign: "center",
+    width: "100%",
+    boxSizing: "border-box",
   };
 
   const linkStyle: React.CSSProperties = {
@@ -260,28 +277,10 @@ const SignupPage: React.FC = () => {
     textAlign: "center",
   };
 
-  const SPECIALTIES = [
-  "Clinical Psychology",
-  "CBT (Cognitive Behavioral Therapy)",
-  "DBT (Dialectical Behavior Therapy)",
-  "Trauma / PTSD",
-  "Child & Adolescent Psychology",
-  "Family & Couples Therapy",
-  "Anxiety Disorders",
-  "Mood Disorders",
-  "Addiction",
-  "Neuropsychology",
-  "Health Psychology",
-  "Other",
-];
-
-
   return (
     <div style={screenStyle}>
       <div style={phoneStyle}>
-        {/* TOP / LOGO SECTION */}
         <div style={topSectionStyle}>
-          {/* Home icon */}
           <button
             type="button"
             style={homeIconButtonStyle}
@@ -296,13 +295,13 @@ const SignupPage: React.FC = () => {
           <div style={tornEdgeStyle} />
         </div>
 
-        {/* BOTTOM / SIGNUP SECTION */}
         <div style={bottomSectionStyle}>
           <div style={titleStyle}>Create New Account</div>
           <div style={subtitleStyle}>join to our family</div>
 
           <form
             onSubmit={handleSubmit}
+            noValidate
             style={{
               width: "80%",
               display: "flex",
@@ -310,56 +309,63 @@ const SignupPage: React.FC = () => {
               alignItems: "center",
             }}
           >
-            {/* Account type */}
-              <div style={pillWrapperStyle}>
-                <select
-                  style={selectStyle}
-                  value={role}
-                  onChange={(e) => setRole(e.target.value as "regular" | "psychologist")}
-                >
-                  <option value="regular">Regular user</option>
-                  <option value="psychologist">Psychologist</option>
-                </select>
-                <span style={caretStyle}>▼</span>
-              </div>
+            <div style={pillWrapperStyle}>
+              <select
+                style={selectStyle}
+                value={role}
+                onChange={(e) => {
+                  setRole(e.target.value as "regular" | "psychologist");
+                  setError(null);
+                }}
+              >
+                <option value="regular">Regular user</option>
+                <option value="psychologist">Psychologist</option>
+              </select>
+              <span style={caretStyle}>▼</span>
+            </div>
 
-            {/* Username */}
             <div style={pillWrapperStyle}>
               <input
                 style={inputStyle}
                 type="text"
                 placeholder="Username"
                 value={username}
-                onChange={(e) => setUsername(e.target.value)}
+                onChange={(e) => {
+                  setUsername(e.target.value);
+                  if (error) setError(null);
+                }}
                 required
               />
             </div>
 
-            {/* Email */}
             <div style={pillWrapperStyle}>
               <input
                 style={inputStyle}
                 type="email"
                 placeholder="Email"
                 value={email}
-                onChange={(e) => setEmail(e.target.value)}
+                onChange={(e) => {
+                  setEmail(e.target.value);
+                  if (error) setError(null);
+                }}
                 required
               />
             </div>
 
-            {/* Password */}
             <div style={pillWrapperStyle}>
               <input
                 style={inputStyle}
                 type="password"
                 placeholder="Password"
                 value={password}
-                onChange={(e) => setPassword(e.target.value)}
+                onChange={(e) => {
+                  setPassword(e.target.value);
+                  if (error) setError(null);
+                }}
                 required
               />
             </div>
 
-            {/* Age */}
             <div style={pillWrapperStyle}>
               <input
                 style={inputStyle}
@@ -374,7 +380,6 @@ const SignupPage: React.FC = () => {
               />
             </div>
 
-            {/* Gender */}
             <div style={pillWrapperStyle}>
               <select
                 style={selectStyle}
@@ -388,50 +393,22 @@ const SignupPage: React.FC = () => {
               </select>
               <span style={caretStyle}>▼</span>
             </div>
+
             {role === "psychologist" && (
-            <>
-            <div style={pillWrapperStyle}>
-              <select
-                style={inputStyle}
-                value={specialty ?? ""}
-                onChange={(e) => setSpecialty(e.target.value)}
-                required
-              >
-                <option value="" disabled>
-                  Select specialty
-                </option>
-
-                {SPECIALTIES.map((s) => (
-                  <option key={s} value={s}>
-                    {s}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-
-            <div style={pillWrapperStyle}>
-              <input
-                style={inputStyle}
-                type="text"
-                placeholder="Workplace"
-                value={workplace}
-                onChange={(e) => setWorkplace(e.target.value)}
-              />
-            </div>
-
               <div style={pillWrapperStyle}>
                 <input
                   style={inputStyle}
                   type="text"
-                  placeholder="City"
-                  value={city}
-                  onChange={(e) => setCity(e.target.value)}
+                  placeholder="License number, example: 27-147619"
+                  value={licenseNumber}
+                  onChange={(e) => {
+                    setLicenseNumber(e.target.value);
+                    if (error) setError(null);
+                  }}
+                  required
                 />
               </div>
-            </>
-          )}
-
+            )}
 
             {error && <div style={errorStyle}>{error}</div>}
 

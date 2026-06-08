@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import logo from "../assets/mendly-logo.jpg";
 import { Capacitor } from "@capacitor/core";
+import PsyAvailabilityButton from "../components/PsyAvailabilityButton";
 
 const isNative = Capacitor.isNativePlatform?.() ?? false;
 
@@ -775,9 +776,7 @@ const PsychologistRequestsPage: React.FC = () => {
           <button type="button" style={navItem} onClick={() => navigate("/psy/profile")} aria-label="Profile">
             <span style={{ fontSize: 20 }}>👤</span> Profile
           </button>
-          <button type="button" style={navItem} onClick={() => navigate("/psy/messages")} aria-label="Messages">
-            <span style={{ fontSize: 20 }}>💬</span> Messages
-          </button>
+          <PsyAvailabilityButton style={navItem} />
         </div>
 
         {/* ================= DETAILS MODAL ================= */}

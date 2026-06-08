@@ -3,6 +3,7 @@ import React, { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import logo from "../assets/mendly-logo.jpg";
 import thankYouImg from "../assets/thank-you.png"; // ⬅️ your image
+import HappyPhotoMemoriesButton from "../components/HappyPhotoMemoriesButton";
 
 const CheckInPage: React.FC = () => {
   const navigate = useNavigate();
@@ -586,6 +587,8 @@ const CheckInPage: React.FC = () => {
             <div style={{ fontSize: 22 }}>👤</div>
             <div>Profile</div>
           </button>
+
+          <HappyPhotoMemoriesButton navItemStyle={navItemStyle} />
 
           <button
             type="button"

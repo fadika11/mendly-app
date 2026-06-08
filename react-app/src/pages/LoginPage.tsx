@@ -1,62 +1,117 @@
 import React, { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { login } from "../api/auth";
-import logo from "../assets/mendly-logo.jpg"; // <-- your logo file
+import { login, API_BASE } from "../api/auth";
+import logo from "../assets/mendly-logo.jpg";
+
 
 const LoginPage: React.FC = () => {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-
   const navigate = useNavigate();
+  
+  const getErrorMessage = (err: any) => {
+    const msg =
+      err?.message ||
+      err?.response?.data?.detail ||
+      "Login failed. Please try again.";
+
+    if (typeof msg === "string") {
+      if (
+        msg.toLowerCase().includes("incorrect") ||
+        msg.toLowerCase().includes("invalid") ||
+        msg.toLowerCase().includes("unauthorized")
+      ) {
+        return "Incorrect username or password.";
+      }
+
+      return msg;
+    }
+
+    return "Incorrect username or password.";
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    if (loading) return;
+
     setError(null);
+
+    const cleanUsername = username.trim();
+    const cleanPassword = password.trim();
+
+    if (!cleanUsername || !cleanPassword) {
+      setError("Please enter username and password.");
+      return;
+    }
+
     setLoading(true);
 
     try {
-      const token = await login({ username, password });
+      const token = await login({
+        username: cleanUsername,
+        password: cleanPassword,
+      });
 
-    localStorage.setItem("access_token", token.access_token);
+      if (!token?.access_token) {
+        throw new Error("Login failed. Missing access token.");
+      }
 
-    localStorage.setItem(
-      "user",
-      JSON.stringify({
-        user_id: token.user_id,
-        username: token.username,
-        role: token.role,
-      })
-    );
+      localStorage.setItem("access_token", token.access_token);
 
-    if (token.role === "psychologist") {
-      navigate("/psy");
-    } else {
-      navigate("/journey");
-    }
+      localStorage.setItem(
+        "user",
+        JSON.stringify({
+          user_id: token.user_id,
+          username: token.username,
+          role: token.role,
+        })
+      );
 
+      if (token.role === "psychologist") {
+        const meRes = await fetch(`${API_BASE}/auth/me`, {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${token.access_token}`,
+          },
+        });
+
+        if (!meRes.ok) {
+          navigate("/psy", { replace: true });
+          return;
+        }
+
+        const me = await meRes.json();
+        const profile = me?.psychologist_profile;
+
+        const profileCompleted =
+          profile &&
+          String(profile.specialty || "").trim() &&
+          String(profile.specialty || "").trim().toLowerCase() !== "not completed" &&
+          String(profile.workplace || "").trim() &&
+          String(profile.city || "").trim();
+        if (profileCompleted) {
+          navigate("/psy", { replace: true });
+        } else {
+          navigate("/psy/complete-profile", { replace: true });
+        }
+      } else {
+        navigate("/journey", { replace: true });
+      }
     } catch (err: any) {
-      const msg =
-        err?.response?.data?.detail ??
-        err?.message ??
-        "Login failed";
-
-      // show in component state (for web / under form)
-      setError(msg);
-
-      // show as popup on phone
-      alert(msg);
+      localStorage.removeItem("access_token");
+      localStorage.removeItem("user");
+      setPassword("");
+      setError(getErrorMessage(err));
     } finally {
       setLoading(false);
     }
   };
 
-  // ====== COLORS ======
   const BLUE = "#6BA7E6";
   const CREAM = "#f5e9d9";
-
-  // ====== INLINE STYLES ======
 
   const screenStyle: React.CSSProperties = {
     height: "100vh",
@@ -96,7 +151,6 @@ const LoginPage: React.FC = () => {
     overflow: "hidden",
   };
 
-  // round home icon button in the header
   const homeIconButtonStyle: React.CSSProperties = {
     position: "absolute",
     top: 16,
@@ -203,13 +257,13 @@ const LoginPage: React.FC = () => {
   const buttonPillStyle: React.CSSProperties = {
     width: "100%",
     borderRadius: 999,
-    backgroundColor: "#F4C58F",
+    backgroundColor: loading ? "rgba(244,197,143,0.65)" : "#F4C58F",
     border: "none",
     paddingBlock: 14,
     fontSize: 16,
     fontWeight: 600,
     color: "#3565AF",
-    cursor: "pointer",
+    cursor: loading ? "not-allowed" : "pointer",
     marginTop: 10,
   };
 
@@ -222,18 +276,24 @@ const LoginPage: React.FC = () => {
   };
 
   const errorStyle: React.CSSProperties = {
-    marginTop: 6,
-    fontSize: 12,
+    width: "100%",
+    marginTop: 4,
+    marginBottom: 8,
+    padding: "10px 12px",
+    borderRadius: 14,
+    backgroundColor: "rgba(127, 29, 29, 0.18)",
+    border: "1px solid rgba(255,255,255,0.35)",
+    fontSize: 13,
+    fontWeight: 700,
     color: CREAM,
     textAlign: "center",
+    boxSizing: "border-box",
   };
 
   return (
     <div style={screenStyle}>
       <div style={phoneStyle}>
-        {/* TOP / LOGO SECTION */}
         <div style={topSectionStyle}>
-          {/* Home icon */}
           <button
             type="button"
             style={homeIconButtonStyle}
@@ -246,17 +306,18 @@ const LoginPage: React.FC = () => {
           <div style={logoWrapperStyle}>
             <img src={logo} alt="Mendly logo" style={logoImageStyle} />
           </div>
+
           <div style={appNameStyle}>Mendly App</div>
           <div style={tornEdgeStyle} />
         </div>
 
-        {/* BOTTOM / LOGIN SECTION */}
         <div style={bottomSectionStyle}>
           <div style={titleStyle}>Login</div>
           <div style={subtitleStyle}>Sign in to continue</div>
 
           <form
             onSubmit={handleSubmit}
+            noValidate
             style={{
               width: "80%",
               display: "flex",
@@ -270,8 +331,11 @@ const LoginPage: React.FC = () => {
                 type="text"
                 placeholder="Username"
                 value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                required
+                onChange={(e) => {
+                  setUsername(e.target.value);
+                  if (error) setError(null);
+                }}
+                autoComplete="username"
               />
             </div>
 
@@ -281,8 +345,11 @@ const LoginPage: React.FC = () => {
                 type="password"
                 placeholder="Password"
                 value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
+                onChange={(e) => {
+                  setPassword(e.target.value);
+                  if (error) setError(null);
+                }}
+                autoComplete="current-password"
               />
             </div>
 
@@ -296,6 +363,7 @@ const LoginPage: React.FC = () => {
           <Link to="/signup" style={linkStyle}>
             Create a new account
           </Link>
+
           <Link to="/forgot-password" style={linkStyle}>
             Forgot Password?
           </Link>

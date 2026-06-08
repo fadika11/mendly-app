@@ -2,13 +2,15 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import logo from "../assets/mendly-logo.jpg";
+import { Capacitor } from "@capacitor/core";
+import { Camera, CameraResultType, CameraSource } from "@capacitor/camera";
 
-const isNative = (window as any).Capacitor?.isNativePlatform?.() ?? false;
-  const API_BASE =
-    isNative
-      ? "http://10.0.2.2:8000"                   // emulator → host machine
-      : (import.meta.env.VITE_API_URL as string | undefined) ??
-        "http://localhost:8000";
+const isNative = Capacitor.isNativePlatform?.() ?? false;
+
+const API_BASE = isNative
+  ? "http://10.0.2.2:8000"
+  : (import.meta.env.VITE_API_URL as string | undefined) ??
+    "http://localhost:8000";
 
 interface HappyMemory {
   memory_id: string;
@@ -34,6 +36,10 @@ const PhotoMemoriesPage: React.FC = () => {
   const [editFile, setEditFile] = useState<File | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  // nice delete confirmation modal state
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [memoryToDelete, setMemoryToDelete] = useState<string | null>(null);
 
   // fullscreen state
   const [fullScreenMemory, setFullScreenMemory] = useState<HappyMemory | null>(
@@ -89,20 +95,35 @@ const PhotoMemoriesPage: React.FC = () => {
     fetchMemories();
   }, []);
 
-  // -------- delete memory from DB --------
-  const handleDeleteMemory = async (memoryId: string) => {
-    if (!window.confirm("Delete this memory permanently?")) return;
+  // -------- delete memory from DB with custom modal --------
+  const openDeleteConfirm = (memoryId: string) => {
+    setMemoryToDelete(memoryId);
+    setShowDeleteConfirm(true);
+  };
+
+  const closeDeleteConfirm = () => {
+    if (deletingId) return;
+    setMemoryToDelete(null);
+    setShowDeleteConfirm(false);
+  };
+
+  const handleDeleteMemoryConfirmed = async () => {
+    if (!memoryToDelete) return;
 
     try {
-      setDeletingId(memoryId);
+      setDeletingId(memoryToDelete);
+      setError(null);
+
       const token = window.localStorage.getItem("access_token");
       if (!token) {
         setError("You must be logged in.");
         setDeletingId(null);
+        setMemoryToDelete(null);
+        setShowDeleteConfirm(false);
         return;
       }
 
-      const res = await fetch(`${API_BASE}/photo-memories/${memoryId}`, {
+      const res = await fetch(`${API_BASE}/photo-memories/${memoryToDelete}`, {
         method: "DELETE",
         headers: {
           Authorization: `Bearer ${token}`,
@@ -114,14 +135,22 @@ const PhotoMemoriesPage: React.FC = () => {
         console.error("Failed to delete memory", res.status, txt);
         setError("Could not delete this memory.");
         setDeletingId(null);
+        setMemoryToDelete(null);
+        setShowDeleteConfirm(false);
         return;
       }
 
-      // remove from local state
-      setMemories((prev) => prev.filter((m) => m.memory_id !== memoryId));
+      setMemories((prev) =>
+        prev.filter((m) => m.memory_id !== memoryToDelete)
+      );
+
+      setMemoryToDelete(null);
+      setShowDeleteConfirm(false);
     } catch (err) {
       console.error("Error deleting memory", err);
       setError("Could not delete this memory.");
+      setMemoryToDelete(null);
+      setShowDeleteConfirm(false);
     } finally {
       setDeletingId(null);
     }
@@ -169,14 +198,15 @@ const PhotoMemoriesPage: React.FC = () => {
       if (editFile) {
         const formData = new FormData();
         formData.append("file", editFile);
+
         if (editCaption.trim()) {
           formData.append("caption", editCaption.trim());
         }
+
         if (editDate) {
           formData.append("memory_date", editDate);
         }
 
-        // upload new memory
         const uploadRes = await fetch(`${API_BASE}/photo-memories/upload`, {
           method: "POST",
           headers: {
@@ -187,18 +217,19 @@ const PhotoMemoriesPage: React.FC = () => {
 
         if (!uploadRes.ok) {
           let detail = "Could not upload the new photo.";
+
           try {
             const data = await uploadRes.json();
             if (data.detail) detail = data.detail;
           } catch {
-            /* ignore */
+            // keep default message
           }
+
           setError(detail);
           setSavingEdit(false);
           return;
         }
 
-        // delete old memory
         const deleteRes = await fetch(
           `${API_BASE}/photo-memories/${editingId}`,
           {
@@ -212,10 +243,8 @@ const PhotoMemoriesPage: React.FC = () => {
         if (!deleteRes.ok) {
           const txt = await deleteRes.text();
           console.error("Failed to delete old memory after upload", txt);
-          // continue anyway; we'll refresh list
         }
       } else {
-        // no new picture → just update caption/date via PUT
         const body = {
           caption: editCaption,
           memory_date: editDate || null,
@@ -239,7 +268,6 @@ const PhotoMemoriesPage: React.FC = () => {
         }
       }
 
-      // refresh list from server so everything is accurate
       await fetchMemories();
       cancelEdit();
     } catch (err) {
@@ -250,8 +278,105 @@ const PhotoMemoriesPage: React.FC = () => {
   };
 
   // -------- add memory (modal) --------
+  const choosePhotoFromNativeGallery = async (
+    errorTarget: "add" | "edit" = "add"
+  ): Promise<File | null> => {
+    try {
+      if (errorTarget === "add") {
+        setAddError(null);
+      } else {
+        setError(null);
+      }
+
+      const permissions = await Camera.requestPermissions({
+        permissions: ["photos"],
+      });
+
+      if (permissions.photos === "denied") {
+        const msg =
+          "Mendly does not have permission to open your photos. Please allow photo access from your phone settings, then try again.";
+
+        if (errorTarget === "add") {
+          setAddError(msg);
+        } else {
+          setError(msg);
+        }
+
+        return null;
+      }
+
+      const photo = await Camera.getPhoto({
+        source: CameraSource.Photos,
+        resultType: CameraResultType.Uri,
+        quality: 90,
+        correctOrientation: true,
+        allowEditing: false,
+      });
+
+      if (!photo.webPath) {
+        return null;
+      }
+
+      const response = await fetch(photo.webPath);
+
+      if (!response.ok) {
+        throw new Error("Could not read selected photo.");
+      }
+
+      const blob = await response.blob();
+      const extension = photo.format || "jpg";
+
+      return new File([blob], `mendly-memory-${Date.now()}.${extension}`, {
+        type: blob.type || `image/${extension}`,
+      });
+    } catch (err: any) {
+      console.error("Native photo picker error:", err);
+
+      const message = String(err?.message || err || "").toLowerCase();
+
+      // User cancelled picker - this is normal, do not show red error.
+      if (
+        message.includes("cancel") ||
+        message.includes("cancelled") ||
+        message.includes("canceled") ||
+        message.includes("user cancelled")
+      ) {
+        return null;
+      }
+
+      const msg = "Could not open your phone gallery. Please try again.";
+
+      if (errorTarget === "add") {
+        setAddError(msg);
+      } else {
+        setError(msg);
+      }
+
+      return null;
+    }
+  };
+
+  const handleChooseNewMemoryPhoto = async () => {
+    const file = await choosePhotoFromNativeGallery("add");
+
+    if (file) {
+      setNewFile(file);
+      setAddError(null);
+    }
+  };
+
+  const handleChooseEditMemoryPhoto = async () => {
+    const file = await choosePhotoFromNativeGallery("edit");
+
+    if (file) {
+      setEditFile(file);
+      setError(null);
+    }
+  };
+
   const handleUploadNewMemory = async (e: React.FormEvent) => {
     e.preventDefault();
+
     if (!newFile) {
       setAddError("Please choose an image file.");
       return;
@@ -270,9 +395,11 @@ const PhotoMemoriesPage: React.FC = () => {
 
       const formData = new FormData();
       formData.append("file", newFile);
+
       if (newCaption.trim()) {
         formData.append("caption", newCaption.trim());
       }
+
       if (newMemoryDate) {
         formData.append("memory_date", newMemoryDate);
       }
@@ -287,18 +414,19 @@ const PhotoMemoriesPage: React.FC = () => {
 
       if (!res.ok) {
         let detail = "Could not upload the photo.";
+
         try {
           const data = await res.json();
           if (data.detail) detail = data.detail;
         } catch {
-          /* ignore */
+          // keep default message
         }
+
         setAddError(detail);
         setUploadingNew(false);
         return;
       }
 
-      // reset modal state
       setNewFile(null);
       setNewCaption("");
       setNewMemoryDate("");
@@ -306,11 +434,11 @@ const PhotoMemoriesPage: React.FC = () => {
       const inputEl = document.getElementById(
         "add-memory-file-input"
       ) as HTMLInputElement | null;
+
       if (inputEl) {
         inputEl.value = "";
       }
 
-      // refresh main list and close modal
       await fetchMemories();
       setShowAddModal(false);
     } catch (err) {
@@ -321,7 +449,7 @@ const PhotoMemoriesPage: React.FC = () => {
     }
   };
 
-  // ===== LAYOUT STYLES (match JourneyOverview look) =====
+  // ===== LAYOUT STYLES =====
   const screenStyle: React.CSSProperties = {
     height: "100vh",
     width: "100vw",
@@ -627,7 +755,7 @@ const PhotoMemoriesPage: React.FC = () => {
     color: "#e5e7eb",
   };
 
-  // add-memory modal styles (similar vibe to Journey modal)
+  // add-memory modal styles
   const addOverlayStyle: React.CSSProperties = {
     position: "absolute",
     inset: 0,
@@ -730,7 +858,77 @@ const PhotoMemoriesPage: React.FC = () => {
     marginTop: 4,
   };
 
-  // Bottom nav (Profile | Add memories | Chat)
+  // delete confirmation modal styles
+  const confirmOverlayStyle: React.CSSProperties = {
+    position: "absolute",
+    inset: 0,
+    backgroundColor: "rgba(15, 23, 42, 0.55)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 90,
+    padding: 20,
+    boxSizing: "border-box",
+    backdropFilter: "blur(4px)",
+  };
+
+  const confirmBoxStyle: React.CSSProperties = {
+    width: "100%",
+    maxWidth: 360,
+    backgroundColor: CREAM,
+    borderRadius: 24,
+    padding: "22px 18px 18px",
+    boxShadow: "0 16px 40px rgba(15,23,42,0.28)",
+    textAlign: "center",
+    boxSizing: "border-box",
+  };
+
+  const confirmTitleStyle: React.CSSProperties = {
+    fontSize: 20,
+    fontWeight: 800,
+    color: "#3565AF",
+    marginBottom: 8,
+  };
+
+  const confirmTextStyle: React.CSSProperties = {
+    fontSize: 14,
+    color: "#4b5563",
+    lineHeight: 1.5,
+    marginBottom: 20,
+  };
+
+  const confirmActionsStyle: React.CSSProperties = {
+    display: "flex",
+    gap: 10,
+  };
+
+  const cancelConfirmBtnStyle: React.CSSProperties = {
+    flex: 1,
+    border: "none",
+    borderRadius: 999,
+    padding: "12px 14px",
+    fontWeight: 700,
+    fontSize: 14,
+    backgroundColor: "#ffffff",
+    color: "#374151",
+    cursor: "pointer",
+    boxShadow: "0 4px 10px rgba(15,23,42,0.10)",
+  };
+
+  const deleteConfirmBtnStyle: React.CSSProperties = {
+    flex: 1,
+    border: "none",
+    borderRadius: 999,
+    padding: "12px 14px",
+    fontWeight: 700,
+    fontSize: 14,
+    backgroundColor: "#dc2626",
+    color: "#ffffff",
+    cursor: "pointer",
+    boxShadow: "0 4px 10px rgba(220,38,38,0.22)",
+  };
+
+  // Bottom nav
   const bottomNavStyle: React.CSSProperties = {
     width: "100%",
     backgroundColor: CREAM,
@@ -761,7 +959,7 @@ const PhotoMemoriesPage: React.FC = () => {
   return (
     <div style={screenStyle}>
       <div style={phoneStyle}>
-        {/* TOP NAV (same feel as JourneyOverview) */}
+        {/* TOP NAV */}
         <div style={topSectionStyle}>
           <button
             type="button"
@@ -776,11 +974,7 @@ const PhotoMemoriesPage: React.FC = () => {
           <div style={titleBlockStyle}>
             <div style={smallLabelStyle}>
               <span style={tinyLogoStyle}>
-                <img
-                  src={logo}
-                  alt="Mendly logo"
-                  style={tinyLogoImgStyle}
-                />
+                <img src={logo} alt="Mendly logo" style={tinyLogoImgStyle} />
               </span>
               Mendly App
             </div>
@@ -804,7 +998,6 @@ const PhotoMemoriesPage: React.FC = () => {
         {/* CONTENT */}
         <div style={bottomSectionStyle}>
           <div style={innerContentStyle}>
-            {/* Header card with title */}
             <div style={headerCard}>
               <div style={headerRow}>
                 <div style={titleStyle}>
@@ -814,22 +1007,22 @@ const PhotoMemoriesPage: React.FC = () => {
                   <span>Your Happy Memories</span>
                 </div>
               </div>
+
               <div style={subTextStyle}>
-                A gentle gallery of moments worth remembering. When things
-                feel heavy, come back here and remind yourself of brighter
-                days. 💙
+                A gentle gallery of moments worth remembering. When things feel
+                heavy, come back here and remind yourself of brighter days. 💙
               </div>
+
               {error && <div style={errorTextStyle}>{error}</div>}
             </div>
 
-            {/* GRID */}
             <div style={gridWrapper}>
               {loading ? (
                 <div style={stateTextStyle}>Loading your photos...</div>
               ) : memories.length === 0 ? (
                 <div style={stateTextStyle}>
-                  You don&apos;t have any saved memories yet. Add some
-                  happy moments with the button below 📷
+                  You don&apos;t have any saved memories yet. Add some happy
+                  moments with the button below 📷
                 </div>
               ) : (
                 <div style={grid}>
@@ -854,12 +1047,14 @@ const PhotoMemoriesPage: React.FC = () => {
                             style={memoryImage}
                           />
                         </div>
+
                         <div style={memoryBody}>
                           {isEditing ? (
                             <>
                               <div style={{ fontSize: 11, color: "#4b5563" }}>
                                 Edit caption
                               </div>
+
                               <input
                                 type="text"
                                 value={editCaption}
@@ -878,6 +1073,7 @@ const PhotoMemoriesPage: React.FC = () => {
                               >
                                 Edit date
                               </div>
+
                               <input
                                 type="date"
                                 value={editDate}
@@ -894,6 +1090,34 @@ const PhotoMemoriesPage: React.FC = () => {
                               >
                                 Change picture (optional)
                               </div>
+
+                              {isNative ? (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={handleChooseEditMemoryPhoto}
+                                  style={{
+                                    border: "none",
+                                    borderRadius: 999,
+                                    padding: "6px 10px",
+                                    backgroundColor: "#2563eb",
+                                    color: "#f9fafb",
+                                    fontSize: 11,
+                                    fontWeight: 700,
+                                    cursor: "pointer",
+                                    marginTop: 4,
+                                  }}
+                                >
+                                  {editFile ? "Change new picture" : "Choose new picture"}
+                                </button>
+
+                                {editFile && (
+                                  <div style={{ marginTop: 4, fontSize: 10, color: "#2563eb" }}>
+                                    Selected: {editFile.name}
+                                  </div>
+                                )}
+                              </>
+                            ) : (
                               <input
                                 type="file"
                                 accept="image/*"
@@ -909,6 +1133,7 @@ const PhotoMemoriesPage: React.FC = () => {
                                   marginTop: 2,
                                 }}
                               />
+                            )}
 
                               <div style={editButtonsRow}>
                                 <button
@@ -923,6 +1148,7 @@ const PhotoMemoriesPage: React.FC = () => {
                                 >
                                   {savingEdit ? "Saving..." : "Save"}
                                 </button>
+
                                 <button
                                   type="button"
                                   style={{
@@ -944,6 +1170,7 @@ const PhotoMemoriesPage: React.FC = () => {
                                   “{m.caption}”
                                 </div>
                               )}
+
                               {m.memory_date && (
                                 <div style={memoryDateStyle}>
                                   {m.memory_date}
@@ -962,6 +1189,7 @@ const PhotoMemoriesPage: React.FC = () => {
                                 >
                                   Edit
                                 </button>
+
                                 <button
                                   type="button"
                                   style={{
@@ -970,7 +1198,7 @@ const PhotoMemoriesPage: React.FC = () => {
                                     color: "#f9fafb",
                                   }}
                                   onClick={() =>
-                                    handleDeleteMemory(m.memory_id)
+                                    openDeleteConfirm(m.memory_id)
                                   }
                                   disabled={deletingId === m.memory_id}
                                 >
@@ -1003,6 +1231,7 @@ const PhotoMemoriesPage: React.FC = () => {
               >
                 ✕
               </button>
+
               <img
                 src={
                   fullScreenMemory.image_url.startsWith("http")
@@ -1014,11 +1243,13 @@ const PhotoMemoriesPage: React.FC = () => {
                 alt={fullScreenMemory.caption ?? "Happy memory"}
                 style={fullScreenImageStyle}
               />
+
               {fullScreenMemory.caption && (
                 <div style={fullScreenCaptionStyle}>
                   “{fullScreenMemory.caption}”
                 </div>
               )}
+
               {fullScreenMemory.memory_date && (
                 <div style={fullScreenDateStyle}>
                   {fullScreenMemory.memory_date}
@@ -1028,7 +1259,7 @@ const PhotoMemoriesPage: React.FC = () => {
           </div>
         )}
 
-        {/* ADD MEMORY MODAL (opened from bottom "Add memories" button) */}
+        {/* ADD MEMORY MODAL */}
         {showAddModal && (
           <div style={addOverlayStyle}>
             <div style={addModalStyle}>
@@ -1039,6 +1270,7 @@ const PhotoMemoriesPage: React.FC = () => {
                   </span>
                   <span>Add a happy memory</span>
                 </div>
+
                 <button
                   type="button"
                   style={addSmallIconBtn}
@@ -1047,6 +1279,7 @@ const PhotoMemoriesPage: React.FC = () => {
                   ✕
                 </button>
               </div>
+
               <div style={addHintText}>
                 Choose a photo that reminds you of a calm, joyful, or proud
                 moment. You can always come back and edit it later. 💙
@@ -1055,6 +1288,35 @@ const PhotoMemoriesPage: React.FC = () => {
               <form onSubmit={handleUploadNewMemory} style={addFormRow}>
                 <div>
                   <div style={addSmallLabel}>Photo</div>
+
+                  {isNative ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={handleChooseNewMemoryPhoto}
+                      style={{
+                        border: "none",
+                        borderRadius: 999,
+                        padding: "8px 12px",
+                        backgroundColor: "#2563eb",
+                        color: "#f9fafb",
+                        fontSize: 12,
+                        fontWeight: 700,
+                        cursor: "pointer",
+                        boxShadow: "0 4px 10px rgba(37,99,235,0.3)",
+                        marginTop: 4,
+                      }}
+                    >
+                      {newFile ? "Change photo" : "Choose photo"}
+                    </button>
+
+                    {newFile && (
+                      <div style={{ marginTop: 4, fontSize: 11, color: "#2563eb" }}>
+                        Selected: {newFile.name}
+                      </div>
+                    )}
+                  </>
+                ) : (
                   <input
                     id="add-memory-file-input"
                     type="file"
@@ -1068,10 +1330,12 @@ const PhotoMemoriesPage: React.FC = () => {
                     }
                     style={{ fontSize: 11, marginTop: 2 }}
                   />
+                )}
                 </div>
 
                 <div>
                   <div style={addSmallLabel}>Caption (optional)</div>
+
                   <input
                     type="text"
                     value={newCaption}
@@ -1083,6 +1347,7 @@ const PhotoMemoriesPage: React.FC = () => {
 
                 <div>
                   <div style={addSmallLabel}>Date (optional)</div>
+
                   <input
                     type="date"
                     value={newMemoryDate}
@@ -1105,7 +1370,51 @@ const PhotoMemoriesPage: React.FC = () => {
           </div>
         )}
 
-        {/* BOTTOM NAV (Profile | Add memories | Chat) */}
+        {/* DELETE CONFIRM MODAL */}
+        {showDeleteConfirm && (
+          <div style={confirmOverlayStyle} onClick={closeDeleteConfirm}>
+            <div style={confirmBoxStyle} onClick={(e) => e.stopPropagation()}>
+              <div style={confirmTitleStyle}>Delete memory?</div>
+
+              <div style={confirmTextStyle}>
+                Are you sure you want to delete this happy photo memory?
+                <br />
+                This action cannot be undone.
+              </div>
+
+              <div style={confirmActionsStyle}>
+                <button
+                  type="button"
+                  style={{
+                    ...cancelConfirmBtnStyle,
+                    opacity: deletingId ? 0.7 : 1,
+                    cursor: deletingId ? "default" : "pointer",
+                  }}
+                  onClick={closeDeleteConfirm}
+                  disabled={!!deletingId}
+                >
+                  Cancel
+                </button>
+
+                <button
+                  type="button"
+                  style={{
+                    ...deleteConfirmBtnStyle,
+                    opacity: deletingId === memoryToDelete ? 0.7 : 1,
+                    cursor:
+                      deletingId === memoryToDelete ? "default" : "pointer",
+                  }}
+                  onClick={handleDeleteMemoryConfirmed}
+                  disabled={deletingId === memoryToDelete}
+                >
+                  {deletingId === memoryToDelete ? "Deleting..." : "Delete"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* BOTTOM NAV */}
         <div style={bottomNavStyle}>
           <div
             style={navItemStyle}
@@ -1123,7 +1432,9 @@ const PhotoMemoriesPage: React.FC = () => {
             role="button"
             aria-label="Add memories"
           >
-            <strong><div style={{ fontSize: 22 }}>+</div></strong>
+            <strong>
+              <div style={{ fontSize: 22 }}>+</div>
+            </strong>
             <div>Add memory</div>
           </div>
 

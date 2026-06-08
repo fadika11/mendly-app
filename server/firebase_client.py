@@ -1,4 +1,3 @@
-# server/firebase_client.py
 import os
 import logging
 from typing import Optional, Dict
@@ -8,8 +7,6 @@ from firebase_admin import credentials, messaging  # type: ignore
 
 log = logging.getLogger("mendly.firebase")
 
-# Path to your Firebase service account JSON file
-# Configure in server/.env: FCM_CREDENTIALS=server/firebase-key.json
 FCM_CREDENTIALS = os.getenv("FCM_CREDENTIALS", "server/firebase-key.json")
 
 FCM_ENABLED = False
@@ -25,7 +22,6 @@ try:
     FCM_ENABLED = True
     log.info("[firebase] FCM initialized with credentials: %s", FCM_CREDENTIALS)
 except Exception as e:
-    # IMPORTANT: do NOT crash the app – just disable FCM
     log.warning(
         "[firebase] FCM disabled (no valid credentials). "
         "Reason: %r. Notifications will be skipped.", e
@@ -38,17 +34,13 @@ def send_push_to_token(
     title: str,
     body: str,
     data: Optional[Dict[str, str]] = None,
-) -> str:
-    """
-    Send a single push notification via FCM.
-    If FCM is not configured, we just log and return 'fcm_disabled'.
-    """
+):
     if not FCM_ENABLED:
         log.info(
             "[firebase] Skipping push to %s because FCM is disabled (no credentials).",
             token[:12] + "..." if token else "<no-token>",
         )
-        return "fcm_disabled"
+        return False, "fcm_disabled"
 
     msg = messaging.Message(
         notification=messaging.Notification(title=title, body=body),
@@ -58,4 +50,4 @@ def send_push_to_token(
 
     resp = messaging.send(msg)
     log.info("[firebase] Sent push to token %s... -> %s", token[:12], resp)
-    return resp
+    return True, None, resp

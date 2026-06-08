@@ -20,7 +20,14 @@ export const signup = (data: {
   gender?: number;
 }) => axios.post(`${API_BASE}/auth/signup`, data);
 
-export function signupPsychologist(data: any) {
+export function signupPsychologist(data: {
+  username: string;
+  email: string;
+  password: string;
+  age?: number;
+  gender?: number;
+  license_number: string;
+}) {
   return axios.post(`${API_BASE}/auth/signup-psychologist`, data);
 }
 
@@ -42,11 +49,39 @@ export interface TokenResponse {
 
 
 export async function login(payload: LoginRequest): Promise<TokenResponse> {
-  const { data } = await axios.post<TokenResponse>(
-    `${API_BASE}/auth/login`,
-    payload
-  );
-  return data;
+  try {
+    const { data } = await axios.post<TokenResponse>(
+      `${API_BASE}/auth/login`,
+      payload,
+      {
+        headers: {
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    return data;
+  } catch (err: any) {
+    const detail = err?.response?.data?.detail;
+
+    if (typeof detail === "string") {
+      throw new Error(detail);
+    }
+
+    if (Array.isArray(detail)) {
+      throw new Error("Invalid login details. Please check your username and password.");
+    }
+
+    if (err?.response?.status === 401 || err?.response?.status === 400) {
+      throw new Error("Incorrect username or password.");
+    }
+
+    if (err?.code === "ERR_NETWORK") {
+      throw new Error("Cannot connect to the server. Please make sure the backend is running.");
+    }
+
+    throw new Error("Login failed. Please try again.");
+  }
 }
 
 // ============== FORGOT PASSWORD (EMAIL + CODE) ==============
@@ -179,12 +214,21 @@ export async function getJourneyOverview(): Promise<JourneyOverview> {
 export interface AiMessage {
   role: "user" | "assistant";
   content: string;
+  created_at?: string | null;
 }
 
+/*
 export async function sendChatToAI(messages: AiMessage[]): Promise<string> {
   const token = localStorage.getItem("access_token");
   if (!token) {
     throw new Error("Not authenticated");
+  }
+
+  const userMessages = messages.filter((m) => m.role === "user");
+  const latestUser = userMessages[userMessages.length - 1];
+
+  if (!latestUser) {
+    throw new Error("No user message found");
   }
 
   const res = await fetch(`${API_BASE}/ai/chat`, {
@@ -193,16 +237,103 @@ export async function sendChatToAI(messages: AiMessage[]): Promise<string> {
       "Content-Type": "application/json",
       Authorization: `Bearer ${token}`,
     },
-    body: JSON.stringify({ messages }),
+    body: JSON.stringify({
+      message: latestUser.content,
+      history: messages.slice(0, -1),
+    }),
+  });
+
+  const text = await res.text();
+  let data: any = {};
+
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    throw new Error(text || "AI chat failed");
+  }
+
+  if (!res.ok) {
+    throw new Error(data?.detail || "AI chat failed");
+  }
+
+  return data.reply || "";
+}
+*/
+
+export async function sendChatToAI(messages: AiMessage[]): Promise<string> {
+  const token = localStorage.getItem("access_token");
+  if (!token) throw new Error("Not authenticated");
+
+  const userMessages = messages.filter((m) => m.role === "user");
+  const latestUser = userMessages[userMessages.length - 1];
+  if (!latestUser) throw new Error("No user message found");
+
+  const res = await fetch(`${API_BASE}/ai/chat`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      message: latestUser.content,
+      history: messages.slice(0, -1),
+    }),
+  });
+
+  const text = await res.text();
+  let data: any = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    throw new Error(text || "AI chat failed");
+  }
+
+  if (!res.ok) {
+    throw new Error(data?.detail || "AI chat failed");
+  }
+
+  return data.reply || "";
+}
+
+export async function getAiChatHistory(): Promise<AiMessage[]> {
+  const token = localStorage.getItem("access_token");
+  if (!token) throw new Error("Not authenticated");
+
+  const res = await fetch(`${API_BASE}/ai/chat/history`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  const text = await res.text();
+  let data: any = [];
+  try {
+    data = text ? JSON.parse(text) : [];
+  } catch {
+    throw new Error("Failed to load chat history");
+  }
+
+  if (!res.ok) {
+    throw new Error(data?.detail || "Failed to load chat history");
+  }
+
+  return Array.isArray(data) ? data : [];
+}
+
+export async function clearAiChatHistory(): Promise<void> {
+  const token = localStorage.getItem("access_token");
+  if (!token) throw new Error("Not authenticated");
+
+  const res = await fetch(`${API_BASE}/ai/chat/history`, {
+    method: "DELETE",
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
   });
 
   if (!res.ok) {
-    const text = await res.text();
-    throw new Error(text || `AI request failed: ${res.status}`);
+    throw new Error("Failed to clear chat history");
   }
-
-  const json = await res.json();
-  return json.reply as string;
 }
 
 // ---- CHECK-IN API ----
@@ -417,5 +548,212 @@ export async function listPsyAppointments(): Promise<PsyAppointment[]> {
     headers: buildAuthHeaders(),
   });
   if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export interface AudioMoodAnalysisResponse {
+  ok: boolean;
+  emotion?: string;
+  confidence?: number;
+  mendly_state?: string;
+  message?: string;
+  score_saved?: number;
+  label_saved?: string;
+  mood_source?: string;
+  detail?: string;
+  saved?: boolean;
+}
+
+export interface AudioMoodAnalysisResponse {
+  ok: boolean;
+  emotion?: string;
+  confidence?: number;
+  mendly_state?: string;
+  message?: string;
+  score_saved?: number;
+  label_saved?: string;
+  mood_source?: string;
+  detail?: string;
+  saved?: boolean;
+}
+
+export async function uploadAudioForMood(
+  file: Blob,
+  fileName = "mood-recording.wav"
+): Promise<AudioMoodAnalysisResponse> {
+  const token = window.localStorage.getItem("access_token");
+  if (!token) throw new Error("Not logged in");
+
+  const formData = new FormData();
+  formData.append("file", file, fileName);
+
+  const res = await fetch(`${API_BASE}/audio/analyze-mood`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+    body: formData,
+  });
+
+  const text = await res.text();
+
+  let data: any = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    throw new Error(text || "Audio upload failed");
+  }
+
+  if (!res.ok) {
+    throw new Error(data?.detail?.detail || data?.detail || "Audio analysis failed");
+  }
+
+  return data;
+}
+
+
+// ====== PSYCHOLOGIST AVAILABILITY SLOTS ======
+
+export interface AvailabilitySlot {
+  slot_id: string;
+  psychologist_user_id: string;
+  start_at: string;
+  end_at: string | null;
+  is_booked: boolean;
+  appointment_id: string | null;
+  created_at: string | null;
+}
+
+export async function createPsyAvailabilitySlot(payload: {
+  start_at: string;
+  end_at?: string | null;
+}): Promise<AvailabilitySlot> {
+  const res = await fetch(`${API_BASE}/appointments/availability`, {
+    method: "POST",
+    headers: buildAuthHeaders(),
+    body: JSON.stringify(payload),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || `Failed to create availability slot: ${res.status}`);
+  }
+
+  return res.json();
+}
+
+export async function listMyAvailabilitySlots(): Promise<AvailabilitySlot[]> {
+  const res = await fetch(`${API_BASE}/appointments/availability/my`, {
+    method: "GET",
+    headers: buildAuthHeaders(),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || `Failed to load availability slots: ${res.status}`);
+  }
+
+  return res.json();
+}
+
+export async function deletePsyAvailabilitySlot(slotId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/appointments/availability/${slotId}`, {
+    method: "DELETE",
+    headers: buildAuthHeaders(),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || `Failed to delete availability slot: ${res.status}`);
+  }
+}
+
+export async function listAvailableSlotsForPsychologist(
+  psychologistUserId: string,
+  date: string
+): Promise<AvailabilitySlot[]> {
+  const params = new URLSearchParams({
+    psychologist_user_id: psychologistUserId,
+    date,
+  });
+
+  const res = await fetch(`${API_BASE}/appointments/availability?${params.toString()}`, {
+    method: "GET",
+    headers: buildAuthHeaders(),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || `Failed to load available times: ${res.status}`);
+  }
+
+  return res.json();
+}
+
+
+// ====== CIRCLE OF CONTROL ======
+
+export interface ControlCirclePrompt {
+  prompt_id: string;
+  label: string;
+  category_hint: string | null;
+  can_control_message: string;
+  cannot_control_message: string;
+}
+
+export interface ControlCircleEntry {
+  entry_id: string;
+  user_id: string;
+  prompt_id: string | null;
+  prompt_text: string;
+  selected_zone: "can_control" | "cannot_control";
+  feedback_message: string;
+  created_at: string;
+}
+
+export async function listControlCirclePrompts(): Promise<ControlCirclePrompt[]> {
+  const res = await fetch(`${API_BASE}/control-circle/prompts`, {
+    method: "GET",
+    headers: buildAuthHeaders(),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || `Failed to load Circle of Control prompts: ${res.status}`);
+  }
+
+  return res.json();
+}
+
+export async function saveControlCircleEntry(payload: {
+  prompt_id?: string | null;
+  prompt_text: string;
+  selected_zone: "can_control" | "cannot_control";
+}): Promise<ControlCircleEntry> {
+  const res = await fetch(`${API_BASE}/control-circle/entries`, {
+    method: "POST",
+    headers: buildAuthHeaders(),
+    body: JSON.stringify(payload),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || `Failed to save Circle of Control entry: ${res.status}`);
+  }
+
+  return res.json();
+}
+
+export async function listControlCircleHistory(): Promise<ControlCircleEntry[]> {
+  const res = await fetch(`${API_BASE}/control-circle/history`, {
+    method: "GET",
+    headers: buildAuthHeaders(),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || `Failed to load Circle of Control history: ${res.status}`);
+  }
+
   return res.json();
 }

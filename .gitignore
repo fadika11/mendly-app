@@ -1,9 +1,11 @@
 ###################################
 # Root .gitignore for Mendly app
-# (React + Vite + FastAPI + SQL Server)
+# React + Vite + Capacitor Android + FastAPI + SQL Server
 ###################################
 
-# --- Node / JS ---
+# =========================================================
+# Node / JavaScript / React
+# =========================================================
 node_modules/
 **/node_modules/
 npm-debug.log*
@@ -11,7 +13,24 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
-# --- Python / FastAPI ---
+# React / Vite build outputs
+react-app/dist/
+react-app/build/
+react-app/.vite/
+**/.vite/
+.cache/
+
+# TypeScript / JS coverage
+coverage/
+.nyc_output/
+jest-cache/
+jest-stare/
+*.lcov
+*.tsbuildinfo
+
+# =========================================================
+# Python / FastAPI
+# =========================================================
 __pycache__/
 **/__pycache__/
 *.py[cod]
@@ -23,18 +42,22 @@ __pycache__/
 dist/
 build/
 htmlcov/
+.coverage
 .coverage*
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
 .pytype/
-.envrc
 
-# Virtual environments
+# Python virtual environments
+.venv/
+venv/
 env/
-.env/
 
-# --- Environment files (keep examples only) ---
+# =========================================================
+# Environment files / secrets
+# Keep only .env.example files
+# =========================================================
 .env
 .env.*
 !.env.example
@@ -47,22 +70,69 @@ server/.env
 server/.env.*
 !server/.env.example
 
-# --- Frontend build / cache (Vite / React) ---
-react-app/dist/
-react-app/build/
-react-app/.vite/
-**/.vite/
-.cache/
+.envrc
 
-# --- Test / coverage (JS + TS) ---
-coverage/
-.nyc_output/
-jest-cache/
-jest-stare/
-*.lcov
-*.tsbuildinfo
+# Firebase / private keys
+server/firebase-key.json
+firebase-key.json
+*.pem
+*.key
+*.p12
 
-# --- Logs & runtime data ---
+# =========================================================
+# Android / Capacitor generated files
+# =========================================================
+react-app/android/.gradle/
+react-app/android/build/
+react-app/android/app/build/
+react-app/android/app/release/
+react-app/android/app/debug/
+react-app/android/local.properties
+react-app/android/.idea/
+
+# Android signing keys - DO NOT upload
+*.jks
+*.keystore
+*.keystore.properties
+key.properties
+
+# Android Studio / Gradle temporary files
+.gradle/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# =========================================================
+# Uploaded user data / runtime files
+# =========================================================
+media/
+uploads/
+tmp/
+temp/
+
+# =========================================================
+# Large AI model / cache folders
+# =========================================================
+pretrained_models/
+wav2vec2_checkpoints/
+models_cache/
+huggingface_cache/
+
+# =========================================================
+# SQL Server database artifacts
+# =========================================================
+*.mdf
+*.ldf
+*.ndf
+*.bak
+*.trn
+
+# Keep your schema SQL file
+!mendly_schema.sql
+
+# =========================================================
+# Logs & runtime data
+# =========================================================
 logs/
 *.log
 pids
@@ -71,14 +141,18 @@ pids
 *.pid.lock
 node_repl_history
 
-# --- OS cruft ---
+# =========================================================
+# OS files
+# =========================================================
 .DS_Store
 Thumbs.db
 ehthumbs.db
 Icon?
 Desktop.ini
 
-# --- Editors / IDEs ---
+# =========================================================
+# Editors / IDEs
+# =========================================================
 .vscode/*
 !.vscode/extensions.json
 !.vscode/settings.json
@@ -91,19 +165,10 @@ Desktop.ini
 *.sw?
 *.iml
 
-# --- Database / SQL Server artifacts ---
-*.mdf
-*.ldf
-*.ndf
-*.bak
-*.trn
-
-# --- Tooling / misc ---
+# =========================================================
+# Tooling / misc
+# =========================================================
 .direnv
 firebase-debug.log
 *.local
 *.orig
-
-
-
-server/firebase-key.json

@@ -1,5 +1,14 @@
 /* ===== Schema: Mendly Core ===== */
 
+IF DB_ID(N'Mendly') IS NULL
+BEGIN
+    CREATE DATABASE Mendly;
+END
+GO
+
+USE Mendly;
+GO
+
 -- 0) Safety: create schema if needed
 IF NOT EXISTS (SELECT * FROM sys.schemas WHERE name = 'dbo') EXEC('CREATE SCHEMA dbo');
 
@@ -427,6 +436,25 @@ CREATE INDEX IX_HappyMemories_User ON dbo.HappyMemories(user_id, created_at DESC
 GO
 
 
+------------------------------------------------------------
+-- 17) AiChatMessages
+------------------------------------------------------------
+IF OBJECT_ID('dbo.AiChatMessages', 'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.AiChatMessages (
+        chat_message_id UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+        user_id UNIQUEIDENTIFIER NOT NULL,
+        role NVARCHAR(20) NOT NULL,
+        content NVARCHAR(MAX) NOT NULL,
+        created_at DATETIMEOFFSET NOT NULL DEFAULT SYSDATETIMEOFFSET()
+    );
+
+    CREATE INDEX IX_AiChatMessages_UserCreatedAt
+        ON dbo.AiChatMessages(user_id, created_at);
+END
+GO
+
+
 /* ===== Seed: Admin User (safe to re-run) ===== */
 BEGIN TRY
     BEGIN TRAN;
@@ -482,71 +510,402 @@ BEGIN CATCH
     THROW;
 END CATCH;
 
-CREATE TABLE dbo.AppointmentIntakes (
-  intake_id UNIQUEIDENTIFIER NOT NULL DEFAULT NEWSEQUENTIALID() PRIMARY KEY,
 
-  client_user_id UNIQUEIDENTIFIER NOT NULL,
-  psychologist_user_id UNIQUEIDENTIFIER NOT NULL,
+------------------------------------------------------------
+-- 18) ControlCirclePrompts
+-- Default worry/thought cards for Circle of Control feature
+------------------------------------------------------------
+IF OBJECT_ID('dbo.ControlCirclePrompts','U') IS NOT NULL
+    DROP TABLE dbo.ControlCirclePrompts;
+GO
 
-  answers_json NVARCHAR(MAX) NOT NULL,
+CREATE TABLE dbo.ControlCirclePrompts (
+    prompt_id UNIQUEIDENTIFIER NOT NULL
+        CONSTRAINT PK_ControlCirclePrompts PRIMARY KEY
+        DEFAULT NEWSEQUENTIALID(),
 
-  created_at DATETIMEOFFSET NOT NULL DEFAULT SYSDATETIMEOFFSET(),
+    label NVARCHAR(120) NOT NULL,
+    category_hint NVARCHAR(40) NULL,
 
-  CONSTRAINT FK_Intakes_Client
-    FOREIGN KEY (client_user_id) REFERENCES dbo.Users(user_id) ON DELETE CASCADE,
+    can_control_message NVARCHAR(700) NOT NULL,
+    cannot_control_message NVARCHAR(700) NOT NULL,
 
-  CONSTRAINT FK_Intakes_Psychologist
-    FOREIGN KEY (psychologist_user_id) REFERENCES dbo.Users(user_id)
+    is_active BIT NOT NULL
+        CONSTRAINT DF_ControlCirclePrompts_IsActive DEFAULT (1),
+
+    created_at DATETIMEOFFSET NOT NULL
+        CONSTRAINT DF_ControlCirclePrompts_Created DEFAULT SYSDATETIMEOFFSET()
 );
+GO
 
+CREATE UNIQUE INDEX UQ_ControlCirclePrompts_Label
+ON dbo.ControlCirclePrompts(label);
+GO
+
+
+------------------------------------------------------------
+-- 19) UserControlCircleEntries
+-- Saves what the user dragged into the control/cannot-control circle
+------------------------------------------------------------
+IF OBJECT_ID('dbo.UserControlCircleEntries','U') IS NOT NULL
+    DROP TABLE dbo.UserControlCircleEntries;
+GO
+
+CREATE TABLE dbo.UserControlCircleEntries (
+    entry_id UNIQUEIDENTIFIER NOT NULL
+        CONSTRAINT PK_UserControlCircleEntries PRIMARY KEY
+        DEFAULT NEWSEQUENTIALID(),
+
+    user_id UNIQUEIDENTIFIER NOT NULL,
+    prompt_id UNIQUEIDENTIFIER NULL,
+
+    prompt_text NVARCHAR(200) NOT NULL,
+
+    selected_zone NVARCHAR(30) NOT NULL,
+    -- can_control / cannot_control
+
+    feedback_message NVARCHAR(900) NOT NULL,
+
+    created_at DATETIMEOFFSET NOT NULL
+        CONSTRAINT DF_UserControlCircleEntries_Created DEFAULT SYSDATETIMEOFFSET(),
+
+    CONSTRAINT FK_UserControlCircleEntries_Users
+        FOREIGN KEY (user_id)
+        REFERENCES dbo.Users(user_id)
+        ON DELETE CASCADE,
+
+    CONSTRAINT FK_UserControlCircleEntries_Prompt
+        FOREIGN KEY (prompt_id)
+        REFERENCES dbo.ControlCirclePrompts(prompt_id),
+
+    CONSTRAINT CK_UserControlCircleEntries_Zone
+        CHECK (selected_zone IN (N'can_control', N'cannot_control'))
+);
+GO
+
+CREATE INDEX IX_UserControlCircleEntries_UserCreated
+ON dbo.UserControlCircleEntries(user_id, created_at DESC);
+GO
+
+
+------------------------------------------------------------
+-- Seed Circle of Control prompts
+------------------------------------------------------------
+INSERT INTO dbo.ControlCirclePrompts
+(label, category_hint, can_control_message, cannot_control_message)
+VALUES
+(
+    N'Fear of the future',
+    N'anxiety',
+    N'Choose one small action for today: plan your next hour, talk to someone you trust, or take a short breathing pause.',
+    N'You cannot know everything about the future right now. Try to bring your attention back to one safe step you can take today.'
+),
+(
+    N'Uncertainty',
+    N'anxiety',
+    N'You can control how you respond to uncertainty: make a simple plan, write down what you know, and choose one next step.',
+    N'Uncertainty is uncomfortable, but you do not need to solve everything at once. Focus on what is true and helpful right now.'
+),
+(
+    N'Loss of control',
+    N'anxiety',
+    N'Pick one small controllable action: drink water, organize your space, send a message, or do one minute of breathing.',
+    N'Some things are outside your control. You can still support your body and mind in this moment.'
+),
+(
+    N'News overload',
+    N'stress',
+    N'You can limit news checking today. Try choosing one or two specific times to check updates, then return to something calming.',
+    N'You cannot control every update or event. It is okay to step away from news when your mind needs rest.'
+),
+(
+    N'Safety concerns',
+    N'safety',
+    N'Focus on practical safety steps you can do now: know your safe place, keep your phone charged, and stay connected with trusted people.',
+    N'You may not control every outside situation, but you can remind yourself of the safety steps already available to you.'
+),
+(
+    N'Overthinking',
+    N'anxiety',
+    N'Write down the thought, then choose one action. Even a tiny action can help your mind feel less stuck.',
+    N'You do not need to answer every thought. Some thoughts can pass without needing a full solution.'
+),
+(
+    N'Waiting for updates',
+    N'stress',
+    N'Set a time to check updates, then do something grounding while you wait: breathing, stretching, or talking to someone.',
+    N'Waiting can feel hard. You cannot force answers to arrive faster, but you can care for yourself while waiting.'
+),
+(
+    N'Feeling unsafe',
+    N'safety',
+    N'Focus on immediate support: move to a safer space, contact someone you trust, or use a calming exercise.',
+    N'You may not control everything around you, but you can choose one step that helps you feel more supported right now.'
+),
+(
+    N'School pressure',
+    N'stress',
+    N'Choose one school task you can start with today. A small step, like reviewing one page or writing one paragraph, is still progress.',
+    N'You cannot control every result immediately. Focus on preparation, rest, and one task at a time.'
+),
+(
+    N'Family tension',
+    N'relationships',
+    N'You can control how you respond. Try speaking calmly, taking a pause, or choosing the right time to talk.',
+    N'You cannot control every person’s reaction. You can still protect your peace and choose a respectful response.'
+),
+(
+    N'Feeling overwhelmed',
+    N'anxiety',
+    N'Pick only one thing to do next. When everything feels too much, one small action is enough to begin.',
+    N'You do not need to solve everything right now. Give yourself permission to slow down.'
+),
+(
+    N'Loneliness',
+    N'emotions',
+    N'You can take one connection step today: message someone, sit near family, or join a small activity.',
+    N'You cannot force connection instantly, but you can gently create chances for support.'
+),
+(
+    N'Too many thoughts',
+    N'anxiety',
+    N'Write down the thoughts and circle only one that needs action today. The rest can wait.',
+    N'You do not have to answer every thought. Some thoughts can pass without needing your attention.'
+),
+(
+    N'Making mistakes',
+    N'self-confidence',
+    N'You can learn from one mistake without judging your whole self. Try asking: what can this teach me?',
+    N'You cannot be perfect all the time. Mistakes are part of learning, not proof that you failed.'
+),
+(
+    N'Health worries',
+    N'anxiety',
+    N'You can take practical steps: rest, drink water, ask for help, or contact a trusted adult or professional if needed.',
+    N'You cannot control every body signal. Try not to fight the worry alone; focus on safe support.'
+),
+(
+    N'Social pressure',
+    N'relationships',
+    N'You can choose your boundaries. It is okay to say no, take space, or choose people who respect you.',
+    N'You cannot control what everyone thinks. Your worth is not decided by other people’s opinions.'
+),
+(
+    N'Feeling behind',
+    N'stress',
+    N'Choose one small step that moves you forward today. Progress does not need to be huge to count.',
+    N'You cannot change yesterday, but you can start from where you are now.'
+),
+(
+    N'Bad mood',
+    N'mood',
+    N'You can support your mood with one gentle action: breathing, music, movement, water, or talking to someone.',
+    N'You do not have to force yourself to feel happy. Feelings can change with time and care.'
+),
+(
+    N'Sleep problems',
+    N'health',
+    N'You can support your sleep tonight with one small routine: dim the screen, breathe slowly, or prepare your bed earlier.',
+    N'You cannot force sleep immediately. Resting your body still matters, even if sleep takes time.'
+),
+(
+    N'Exams',
+    N'stress',
+    N'Choose one focused study block today. Even 20 minutes of review can help you feel more prepared.',
+    N'You cannot control every exam question. You can control preparation, breaks, and asking for help when needed.'
+),
+(
+    N'Arguments',
+    N'relationships',
+    N'You can choose your tone, take a pause, and come back to the conversation when you feel calmer.',
+    N'You cannot fully control how another person reacts. You can still protect your peace and respond with care.'
+),
+(
+    N'Feeling judged',
+    N'self-confidence',
+    N'You can remind yourself of what is true about you, not only what others might think.',
+    N'You cannot control every opinion. Other people’s thoughts do not define your worth.'
+),
+(
+    N'Big decisions',
+    N'stress',
+    N'Break the decision into smaller parts: what do you know, what do you need, and who can help you think clearly?',
+    N'You cannot know every outcome before choosing. It is okay to take the next step with the information you have.'
+),
+(
+    N'Missing someone',
+    N'emotions',
+    N'You can honor the feeling by writing a message, looking at a memory, or talking to someone supportive.',
+    N'You cannot always change distance or time. It is okay to miss someone and still care for yourself today.'
+);
+GO
+
+
+------------------------------------------------------------
+-- 18) AppointmentIntakes
+------------------------------------------------------------
+IF OBJECT_ID('dbo.AppointmentIntakes','U') IS NOT NULL
+    DROP TABLE dbo.AppointmentIntakes;
+GO
+
+CREATE TABLE dbo.AppointmentIntakes (
+    intake_id UNIQUEIDENTIFIER NOT NULL
+        CONSTRAINT PK_AppointmentIntakes PRIMARY KEY
+        DEFAULT NEWSEQUENTIALID(),
+
+    client_user_id UNIQUEIDENTIFIER NOT NULL,
+    psychologist_user_id UNIQUEIDENTIFIER NOT NULL,
+
+    answers_json NVARCHAR(MAX) NOT NULL,
+
+    created_at DATETIMEOFFSET NOT NULL
+        CONSTRAINT DF_AppointmentIntakes_Created DEFAULT SYSDATETIMEOFFSET(),
+
+    CONSTRAINT FK_Intakes_Client
+        FOREIGN KEY (client_user_id)
+        REFERENCES dbo.Users(user_id)
+        ON DELETE CASCADE,
+
+    CONSTRAINT FK_Intakes_Psychologist
+        FOREIGN KEY (psychologist_user_id)
+        REFERENCES dbo.Users(user_id)
+);
+GO
+
+
+------------------------------------------------------------
+-- 19) Appointments
+------------------------------------------------------------
+IF OBJECT_ID('dbo.Appointments','U') IS NOT NULL
+    DROP TABLE dbo.Appointments;
+GO
 
 CREATE TABLE dbo.Appointments (
-  appointment_id UNIQUEIDENTIFIER NOT NULL DEFAULT NEWSEQUENTIALID() PRIMARY KEY,
+    appointment_id UNIQUEIDENTIFIER NOT NULL
+        CONSTRAINT PK_Appointments PRIMARY KEY
+        DEFAULT NEWSEQUENTIALID(),
 
-  client_user_id UNIQUEIDENTIFIER NOT NULL,
-  psychologist_user_id UNIQUEIDENTIFIER NOT NULL,
+    client_user_id UNIQUEIDENTIFIER NOT NULL,
+    psychologist_user_id UNIQUEIDENTIFIER NOT NULL,
 
-  intake_id UNIQUEIDENTIFIER NULL,
-  start_at DATETIMEOFFSET NOT NULL,
+    intake_id UNIQUEIDENTIFIER NULL,
+    start_at DATETIMEOFFSET NOT NULL,
 
-  status NVARCHAR(20) NOT NULL DEFAULT 'requested',
-  -- requested / approved / rejected / canceled / completed
+    status NVARCHAR(20) NOT NULL
+        CONSTRAINT DF_Appointments_Status DEFAULT ('requested'),
 
-  notes NVARCHAR(500) NULL,
+    notes NVARCHAR(500) NULL,
 
-  created_at DATETIMEOFFSET NOT NULL DEFAULT SYSDATETIMEOFFSET(),
-  updated_at DATETIMEOFFSET NULL,
+    created_at DATETIMEOFFSET NOT NULL
+        CONSTRAINT DF_Appointments_Created DEFAULT SYSDATETIMEOFFSET(),
 
-  CONSTRAINT FK_Appointments_Client
-    FOREIGN KEY (client_user_id) REFERENCES dbo.Users(user_id) ON DELETE CASCADE,
+    updated_at DATETIMEOFFSET NULL,
 
-  CONSTRAINT FK_Appointments_Psychologist
-    FOREIGN KEY (psychologist_user_id) REFERENCES dbo.Users(user_id),
+    availability_slot_id UNIQUEIDENTIFIER NULL,
 
-  CONSTRAINT FK_Appointments_Intake
-    FOREIGN KEY (intake_id) REFERENCES dbo.AppointmentIntakes(intake_id)
+    CONSTRAINT CK_Appointments_Status
+        CHECK (status IN (N'requested', N'approved', N'rejected', N'canceled', N'completed')),
+
+    CONSTRAINT FK_Appointments_Client
+        FOREIGN KEY (client_user_id)
+        REFERENCES dbo.Users(user_id)
+        ON DELETE CASCADE,
+
+    CONSTRAINT FK_Appointments_Psychologist
+        FOREIGN KEY (psychologist_user_id)
+        REFERENCES dbo.Users(user_id),
+
+    CONSTRAINT FK_Appointments_Intake
+        FOREIGN KEY (intake_id)
+        REFERENCES dbo.AppointmentIntakes(intake_id)
 );
+GO
 
 
--- optional FK
--- ALTER TABLE dbo.Appointments ADD CONSTRAINT FK_Appointments_Intake
--- FOREIGN KEY (intake_id) REFERENCES dbo.AppointmentIntakes(intake_id);
+------------------------------------------------------------
+-- 20) PsychologistAvailabilitySlots
+-- Saved available appointment times for psychologists
+------------------------------------------------------------
+IF OBJECT_ID('dbo.PsychologistAvailabilitySlots','U') IS NOT NULL
+    DROP TABLE dbo.PsychologistAvailabilitySlots;
+GO
 
-ALTER TABLE dbo.Appointments
-ADD CONSTRAINT FK_Appointments_Intake
-FOREIGN KEY (intake_id) REFERENCES dbo.AppointmentIntakes(intake_id);
+CREATE TABLE dbo.PsychologistAvailabilitySlots (
+    slot_id UNIQUEIDENTIFIER NOT NULL
+        CONSTRAINT PK_PsychologistAvailabilitySlots PRIMARY KEY
+        DEFAULT NEWSEQUENTIALID(),
 
-CREATE INDEX IX_Appointments_Psy ON dbo.Appointments(psychologist_user_id, status, start_at);
-CREATE INDEX IX_Appointments_Client ON dbo.Appointments(client_user_id, status, start_at);
-CREATE INDEX IX_Intakes_Psy ON dbo.AppointmentIntakes(psychologist_user_id, created_at);
+    psychologist_user_id UNIQUEIDENTIFIER NOT NULL,
 
-ALTER TABLE dbo.Users
-ADD Role NVARCHAR(20) NOT NULL
-    CONSTRAINT DF_Users_Role DEFAULT ('regular');
+    start_at DATETIMEOFFSET NOT NULL,
+    end_at DATETIMEOFFSET NULL,
 
+    is_booked BIT NOT NULL
+        CONSTRAINT DF_PsychologistAvailabilitySlots_IsBooked DEFAULT (0),
+
+    appointment_id UNIQUEIDENTIFIER NULL,
+
+    created_at DATETIMEOFFSET NOT NULL
+        CONSTRAINT DF_PsychologistAvailabilitySlots_Created DEFAULT SYSDATETIMEOFFSET(),
+
+    CONSTRAINT FK_PsychologistAvailabilitySlots_Psychologist
+        FOREIGN KEY (psychologist_user_id)
+        REFERENCES dbo.Users(user_id),
+
+    CONSTRAINT FK_PsychologistAvailabilitySlots_Appointment
+        FOREIGN KEY (appointment_id)
+        REFERENCES dbo.Appointments(appointment_id)
+);
+GO
+
+
+------------------------------------------------------------
+-- 22) Appointment indexes
+------------------------------------------------------------
+CREATE UNIQUE INDEX UQ_PsychologistAvailabilitySlots_PsyStart
+ON dbo.PsychologistAvailabilitySlots(psychologist_user_id, start_at);
+GO
+
+CREATE INDEX IX_PsychologistAvailabilitySlots_PsyDateBooked
+ON dbo.PsychologistAvailabilitySlots(psychologist_user_id, start_at, is_booked);
+GO
+
+CREATE INDEX IX_Appointments_Psy
+ON dbo.Appointments(psychologist_user_id, status, start_at);
+GO
+
+CREATE INDEX IX_Appointments_Client
+ON dbo.Appointments(client_user_id, status, start_at);
+GO
+
+CREATE INDEX IX_Intakes_Psy
+ON dbo.AppointmentIntakes(psychologist_user_id, created_at);
+GO
+
+
+------------------------------------------------------------
+-- 23) Add Role column to Users
+------------------------------------------------------------
+IF COL_LENGTH('dbo.Users', 'Role') IS NULL
+BEGIN
+    ALTER TABLE dbo.Users
+    ADD Role NVARCHAR(20) NOT NULL
+        CONSTRAINT DF_Users_Role DEFAULT ('regular');
+END
+GO
+
+
+------------------------------------------------------------
+-- 24) PsychologistProfiles
+------------------------------------------------------------
+IF OBJECT_ID('dbo.PsychologistProfiles','U') IS NOT NULL
+    DROP TABLE dbo.PsychologistProfiles;
+GO
 
 CREATE TABLE dbo.PsychologistProfiles (
-    user_id UNIQUEIDENTIFIER NOT NULL PRIMARY KEY,
+    user_id UNIQUEIDENTIFIER NOT NULL
+        CONSTRAINT PK_PsychologistProfiles PRIMARY KEY,
+
     specialty NVARCHAR(120) NOT NULL,
     workplace NVARCHAR(200) NULL,
     city NVARCHAR(120) NULL,
@@ -555,7 +914,9 @@ CREATE TABLE dbo.PsychologistProfiles (
     license_number NVARCHAR(80) NULL,
 
     CONSTRAINT FK_PsychologistProfiles_Users
-        FOREIGN KEY (user_id) REFERENCES dbo.Users(user_id)
+        FOREIGN KEY (user_id)
+        REFERENCES dbo.Users(user_id)
         ON DELETE CASCADE
 );
+GO
 

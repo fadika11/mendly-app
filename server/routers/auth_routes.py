@@ -3,21 +3,21 @@ import os
 import smtplib
 import secrets
 import string
+import re
+import httpx
+from urllib.parse import quote
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
-from typing import Dict
+from typing import Dict, Optional
 
-# server/routers/auth_routes.py
 from pydantic import BaseModel
-from typing import Optional
-
 from fastapi import APIRouter, Depends, HTTPException, status, Header
 from jose import JWTError, jwt
 from sqlalchemy import text
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 
 from ..schemas import PsychologistCreate
-
 from ..deps import get_db
 from ..auth import (
     hash_password,
@@ -38,11 +38,11 @@ from ..schemas import (
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
-from sqlalchemy.exc import IntegrityError
+
+# ================== REGULAR SIGNUP ==================
 
 @router.post("/signup", response_model=UserPublic)
 def signup(payload: UserCreate, db: Session = Depends(get_db)):
-    # 1) Check if username or email already exist
     existing = db.execute(
         text("""
             SELECT TOP 1 user_id
@@ -58,7 +58,6 @@ def signup(payload: UserCreate, db: Session = Depends(get_db)):
             detail="Username or email already in use",
         )
 
-    # 2) Insert user
     try:
         db.execute(
             text("""
@@ -82,7 +81,6 @@ def signup(payload: UserCreate, db: Session = Depends(get_db)):
             detail="Username or email already in use",
         )
 
-    # 3) Fetch created user (include Role!)
     row = db.execute(
         text("""
             SELECT TOP 1 user_id, Username, Email, Age, Gender, Role
@@ -105,9 +103,82 @@ def signup(payload: UserCreate, db: Session = Depends(get_db)):
     )
 
 
+# ================== PSYCHOLOGIST LICENSE CHECK ==================
+
+MOH_PSYCHOLOGIST_REGISTRY_BASE = "https://practitioners.health.gov.il/Practitioners/27/search"
+
+
+def normalize_psychologist_license(raw: str) -> str:
+    value = (raw or "").strip()
+
+    if not value:
+        raise HTTPException(status_code=400, detail="License number is required")
+
+    value = value.replace(" ", "")
+
+    if not re.fullmatch(r"27-\d{4,8}", value):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid license format. Use format like 27-147619.",
+        )
+
+    return value
+
+
+def verify_psychologist_license_with_moh(license_number: str) -> bool:
+    normalized = normalize_psychologist_license(license_number)
+    url = f"{MOH_PSYCHOLOGIST_REGISTRY_BASE}?license={quote(normalized)}"
+
+    headers = {
+        "User-Agent": "MendlyApp/1.0 psychologist-license-check",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    }
+
+    try:
+        with httpx.Client(timeout=15.0, follow_redirects=True, headers=headers) as client:
+            response = client.get(url)
+
+        if response.status_code != 200:
+            return False
+
+        page_text = response.text or ""
+
+        has_license = normalized in page_text
+        has_psychologist_registry_text = (
+            "פסיכולוגים בעלי רשיון" in page_text
+            or "פסיכולוגים בעלי רישיון" in page_text
+            or "Psychologists" in page_text
+        )
+
+        no_results_markers = [
+            "groupTitleFound 0",
+            "groupTitleNoResults",
+            "לא נמצאו",
+            "no results",
+        ]
+
+        has_no_results = any(marker.lower() in page_text.lower() for marker in no_results_markers)
+
+        return has_license and has_psychologist_registry_text and not has_no_results
+
+    except Exception:
+        return False
+
+
+# ================== PSYCHOLOGIST SIGNUP ==================
+
 @router.post("/signup-psychologist", response_model=UserPublic)
 def signup_psychologist(payload: PsychologistCreate, db: Session = Depends(get_db)):
-    # 1) Check unique (email OR username)
+    license_number = normalize_psychologist_license(payload.license_number)
+
+    is_valid_license = verify_psychologist_license_with_moh(license_number)
+
+    if not is_valid_license:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid psychologist license number. Please enter a valid Israeli Ministry of Health psychologist license.",
+        )
+
     existing = db.execute(
         text("""
             SELECT TOP 1 user_id
@@ -120,20 +191,21 @@ def signup_psychologist(payload: PsychologistCreate, db: Session = Depends(get_d
     if existing:
         raise HTTPException(status_code=400, detail="Username or email already in use")
 
-    # ✅ (اختياري بس قوي) تمنعي تكرار رقم الرخصة
     lic_exists = db.execute(
         text("""
             SELECT TOP 1 user_id
             FROM dbo.PsychologistProfiles
             WHERE license_number = :lic
         """),
-        {"lic": payload.license_number},
+        {"lic": license_number},
     ).fetchone()
+
     if lic_exists:
         raise HTTPException(status_code=400, detail="License number already in use")
 
+    created_user_id = None
+
     try:
-        # 2) Insert user
         db.execute(
             text("""
                 INSERT INTO dbo.Users (Username, Email, Password, Age, Gender, Role)
@@ -149,12 +221,12 @@ def signup_psychologist(payload: PsychologistCreate, db: Session = Depends(get_d
             },
         )
         db.commit()
+
     except IntegrityError:
         db.rollback()
         raise HTTPException(status_code=400, detail="Username or email already in use")
 
     try:
-        # 3) Fetch created user (include Role!)  ✅ بدون created_at
         row = db.execute(
             text("""
                 SELECT TOP 1 user_id, Username, Email, Age, Gender, Role
@@ -167,7 +239,8 @@ def signup_psychologist(payload: PsychologistCreate, db: Session = Depends(get_d
         if not row:
             raise HTTPException(status_code=500, detail="User created but not found")
 
-        # 4) Insert psychologist profile
+        created_user_id = row.user_id
+
         db.execute(
             text("""
                 INSERT INTO dbo.PsychologistProfiles
@@ -176,14 +249,15 @@ def signup_psychologist(payload: PsychologistCreate, db: Session = Depends(get_d
             """),
             {
                 "user_id": row.user_id,
-                "specialty": payload.specialty,
-                "workplace": payload.workplace,
-                "city": payload.city,
-                "bio": payload.bio,
-                "years_experience": payload.years_experience,
-                "license_number": payload.license_number,
+                "specialty": "Not completed",
+                "workplace": None,
+                "city": None,
+                "bio": "",
+                "years_experience": None,
+                "license_number": license_number,
             },
         )
+
         db.commit()
 
         return UserPublic(
@@ -197,25 +271,39 @@ def signup_psychologist(payload: PsychologistCreate, db: Session = Depends(get_d
 
     except IntegrityError:
         db.rollback()
+
+        if created_user_id is not None:
+            db.execute(
+                text("DELETE FROM dbo.Users WHERE user_id = :uid"),
+                {"uid": created_user_id},
+            )
+            db.commit()
+
         raise HTTPException(status_code=400, detail="Psychologist profile already exists")
+
     except Exception:
         db.rollback()
+
+        if created_user_id is not None:
+            db.execute(
+                text("DELETE FROM dbo.Users WHERE user_id = :uid"),
+                {"uid": created_user_id},
+            )
+            db.commit()
+
         raise
 
 
-
-
 # ================== LOGIN ==================
+
 @router.post("/login", response_model=Token)
 def login(payload: UserLogin, db: Session = Depends(get_db)):
     row = db.execute(
-        text(
-            """
+        text("""
             SELECT TOP 1 user_id, Username, Email, Password, Role
             FROM dbo.Users
             WHERE Username = :username
-        """
-        ),
+        """),
         {"username": payload.username},
     ).fetchone()
 
@@ -225,20 +313,19 @@ def login(payload: UserLogin, db: Session = Depends(get_db)):
             detail="Invalid username or password",
         )
 
-    # IMPORTANT: sub = user_id
     access_token = create_access_token(
         {"sub": str(row.user_id), "username": row.Username}
     )
+
     return Token(
-    access_token=access_token,
-    user_id=str(row.user_id),
-    role=row.Role,
-    username=row.Username,
-)
+        access_token=access_token,
+        user_id=str(row.user_id),
+        role=row.Role,
+        username=row.Username,
+    )
 
 
-
-# ================== FORGOT PASSWORD (email + code) ==================
+# ================== FORGOT PASSWORD ==================
 
 RESET_CODES: Dict[str, Dict[str, object]] = {}
 
@@ -276,22 +363,20 @@ def send_reset_email(to_email: str, code: str) -> None:
 
 @router.post("/forgot-password/start")
 def forgot_password_start(
-    payload: ForgotPasswordStart, db: Session = Depends(get_db)
+    payload: ForgotPasswordStart,
+    db: Session = Depends(get_db),
 ):
     email = payload.email.lower()
 
     row = db.execute(
-        text(
-            """
+        text("""
             SELECT TOP 1 user_id
             FROM dbo.Users
             WHERE Email = :email
-        """
-        ),
+        """),
         {"email": email},
     ).fetchone()
 
-    # Always respond OK for security
     if not row:
         print(f"[forgot-password] No user with email {email}, but returning OK.")
         return {"ok": True, "message": "If this email is registered, a code was sent."}
@@ -307,7 +392,8 @@ def forgot_password_start(
 
 @router.post("/forgot-password/verify")
 def forgot_password_verify(
-    payload: ForgotPasswordVerify, db: Session = Depends(get_db)
+    payload: ForgotPasswordVerify,
+    db: Session = Depends(get_db),
 ):
     email = payload.email.lower()
     entry = RESET_CODES.get(email)
@@ -341,34 +427,30 @@ def forgot_password_verify(
         )
 
     db.execute(
-        text(
-            """
+        text("""
             UPDATE dbo.Users
             SET Password = :new_password
             WHERE Email = :email
-        """
-        ),
+        """),
         {
             "email": email,
             "new_password": hash_password(payload.new_password),
         },
     )
+
     db.commit()
     RESET_CODES.pop(email, None)
 
     return {"ok": True, "message": "Password updated successfully."}
 
 
-# ================== /auth/me (PROFILE) ==================
+# ================== /auth/me ==================
 
 JWT_SECRET = os.getenv("JWT_SECRET", "change_me_very_secret")
 JWT_ALG = "HS256"
 
 
 def _user_id_from_authorization(authorization: str = Header(...)) -> str:
-    """
-    Extract user_id from the Bearer token in Authorization header.
-    """
     if not authorization.startswith("Bearer "):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -376,6 +458,7 @@ def _user_id_from_authorization(authorization: str = Header(...)) -> str:
         )
 
     token = authorization.split(" ", 1)[1].strip()
+
     try:
         payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
     except JWTError:
@@ -385,6 +468,7 @@ def _user_id_from_authorization(authorization: str = Header(...)) -> str:
         )
 
     sub = payload.get("sub")
+
     if not sub:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -400,13 +484,11 @@ def get_me(
     db: Session = Depends(get_db),
 ):
     user = db.execute(
-        text(
-            """
+        text("""
             SELECT TOP 1 user_id, Username, Email, Age, Gender, Role
             FROM dbo.Users
             WHERE user_id = :uid
-            """
-        ),
+        """),
         {"uid": user_id},
     ).fetchone()
 
@@ -417,13 +499,11 @@ def get_me(
 
     if user.Role == "psychologist":
         psy = db.execute(
-            text(
-                """
+            text("""
                 SELECT TOP 1 specialty, workplace, city, bio, years_experience, license_number
                 FROM dbo.PsychologistProfiles
                 WHERE user_id = :uid
-                """
-            ),
+            """),
             {"uid": user_id},
         ).fetchone()
 
@@ -455,17 +535,15 @@ def update_me(
     db: Session = Depends(get_db),
 ):
     db.execute(
-        text(
-            """
+        text("""
             UPDATE dbo.Users
             SET Username = :username,
-                Email    = :email,
-                Age      = :age,
-                Gender   = :gender,
+                Email = :email,
+                Age = :age,
+                Gender = :gender,
                 updated_at = SYSDATETIMEOFFSET()
             WHERE user_id = :uid
-            """
-        ),
+        """),
         {
             "username": payload.username,
             "email": payload.email,
@@ -474,16 +552,15 @@ def update_me(
             "uid": user_id,
         },
     )
+
     db.commit()
 
     row = db.execute(
-        text(
-            """
+        text("""
             SELECT TOP 1 user_id, Username, Email, Age, Gender, Role
             FROM dbo.Users
             WHERE user_id = :uid
-            """
-        ),
+        """),
         {"uid": user_id},
     ).fetchone()
 
@@ -500,8 +577,7 @@ def update_me(
     )
 
 
-
-# ================== CHANGE PASSWORD (PROFILE) ==================
+# ================== CHANGE PASSWORD ==================
 
 @router.post("/change-password")
 def change_password(
@@ -509,19 +585,12 @@ def change_password(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    """
-    current_user is loaded via JWT (sub = user_id) using get_current_user.
-    """
-    # 1) Load current hash for safety (or you could use current_user.Password if you
-    #    include Password in get_user_by_id).
     row = db.execute(
-        text(
-            """
+        text("""
             SELECT TOP 1 user_id, Password
             FROM dbo.Users
             WHERE user_id = :uid
-            """
-        ),
+        """),
         {"uid": current_user.user_id},
     ).fetchone()
 
@@ -531,30 +600,31 @@ def change_password(
             detail="Current password is incorrect",
         )
 
-    # 2) Update password
     db.execute(
-        text(
-            """
+        text("""
             UPDATE dbo.Users
             SET Password = :new_password,
                 updated_at = SYSDATETIMEOFFSET()
             WHERE user_id = :uid
-        """
-        ),
+        """),
         {
             "uid": current_user.user_id,
             "new_password": hash_password(payload.new_password),
         },
     )
+
     db.commit()
 
     return {"ok": True, "message": "Password updated successfully."}
+
+
+# ================== PSYCHOLOGIST PROFILE ==================
 
 class PsychologistProfileUpdate(BaseModel):
     specialty: str
     workplace: str
     city: str
-    bio: str
+    bio: Optional[str] = ""
     years_experience: Optional[int] = None
     license_number: Optional[str] = None
 
@@ -565,7 +635,6 @@ def upsert_psychologist_profile(
     user_id: str = Depends(_user_id_from_authorization),
     db: Session = Depends(get_db),
 ):
-    # 1) confirm user is psychologist
     user = db.execute(
         text("""
             SELECT TOP 1 user_id, Role
@@ -581,15 +650,25 @@ def upsert_psychologist_profile(
     if user.Role != "psychologist":
         raise HTTPException(status_code=403, detail="Only psychologists can update this profile")
 
-    # 2) check if profile exists
     existing = db.execute(
         text("""
-            SELECT TOP 1 user_id
+            SELECT TOP 1 user_id, license_number
             FROM dbo.PsychologistProfiles
             WHERE user_id = :uid
         """),
         {"uid": user_id},
     ).fetchone()
+
+    # Keep the original verified license number.
+    # Do not require/send license_number from complete profile.
+    current_license = None
+    if existing and existing.license_number:
+        current_license = existing.license_number
+    elif payload.license_number:
+        current_license = normalize_psychologist_license(payload.license_number)
+
+    if not current_license:
+        raise HTTPException(status_code=400, detail="Missing verified psychologist license number")
 
     if existing:
         db.execute(
@@ -608,9 +687,9 @@ def upsert_psychologist_profile(
                 "specialty": payload.specialty,
                 "workplace": payload.workplace,
                 "city": payload.city,
-                "bio": payload.bio,
+                "bio": payload.bio or "",
                 "years_experience": payload.years_experience,
-                "license_number": payload.license_number,
+                "license_number": current_license,
             },
         )
     else:
@@ -625,11 +704,12 @@ def upsert_psychologist_profile(
                 "specialty": payload.specialty,
                 "workplace": payload.workplace,
                 "city": payload.city,
-                "bio": payload.bio,
+                "bio": payload.bio or "",
                 "years_experience": payload.years_experience,
-                "license_number": payload.license_number,
+                "license_number": current_license,
             },
         )
 
     db.commit()
+
     return {"ok": True}

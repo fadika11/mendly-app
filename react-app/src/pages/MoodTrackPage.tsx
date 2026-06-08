@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import logo from "../assets/mendly-logo.jpg";
 import { getMoodSeries, type SeriesPoint } from "../api/auth";
+import HappyPhotoMemoriesButton from "../components/HappyPhotoMemoriesButton";
 
 const MoodTrackPage: React.FC = () => {
   const navigate = useNavigate();
@@ -619,6 +620,8 @@ const MoodTrackPage: React.FC = () => {
             <div style={{ fontSize: 22 }}>👤</div>
             <div>Profile</div>
           </button>
+
+          <HappyPhotoMemoriesButton navItemStyle={navItemStyle} />
 
           <button
             type="button"

@@ -1,15 +1,25 @@
 # server/routers/support_routes.py
-from typing import List, Optional
-from fastapi import APIRouter, Query
+from typing import List, Optional, Dict, Any
+from fastapi import APIRouter, Query, HTTPException
 from pydantic import BaseModel
 import math
+import httpx
+import logging
 
 router = APIRouter(
-    prefix="/api",  # -> /api/support-locations
+    prefix="/api",
     tags=["support"],
 )
 
+log = logging.getLogger("mendly.support")
+
 MAX_RADIUS_KM = 30.0
+NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
+
+HEADERS = {
+    "User-Agent": "MendlyApp/1.0 support-location-search"
+}
+
 
 class SupportLocation(BaseModel):
     id: int
@@ -20,362 +30,15 @@ class SupportLocation(BaseModel):
     distanceKm: Optional[float] = None
     lat: Optional[float] = None
     lng: Optional[float] = None
-    city: Optional[str] = None  # internal helper for city search
-
-
-# ===== STATIC SAMPLE CLINICS BY CITY (SEED DATA) =====
-# Each city has at least one "clinic" so the UI always shows something
-# when the user searches by that city name (case-insensitive / partial).
-LOCATIONS: List[SupportLocation] = [
-    # ---------- HAIFA REGION ----------
-    SupportLocation(
-        id=1,
-        name="Haifa Mental Health Center",
-        address="Haifa, Israel",
-        phone="+972-4-0000000",
-        website=None,
-        lat=32.8,
-        lng=35.0,
-        city="haifa",
-    ),
-    SupportLocation(
-        id=2,
-        name="Carmel Psychology Clinic",
-        address="Haifa, Israel",
-        phone="+972-4-0001111",
-        website=None,
-        lat=32.79,
-        lng=35.01,
-        city="haifa",
-    ),
-    SupportLocation(
-        id=3,
-        name="Tirat Carmel Mental Health Service",
-        address="Tirat Carmel, Israel",
-        phone="+972-4-0002222",
-        website=None,
-        lat=32.76,
-        lng=34.97,
-        city="tirat carmel",
-    ),
-    SupportLocation(
-        id=4,
-        name="Krayot Counseling Center",
-        address="Kiryat Bialik / Kiryat Motzkin, Israel",
-        phone="+972-4-0003333",
-        website=None,
-        lat=32.83,
-        lng=35.09,
-        city="krayot",
-    ),
-
-    # ---------- TEL AVIV METRO ----------
-    SupportLocation(
-        id=10,
-        name="Tel Aviv Mental Health Center",
-        address="Tel Aviv, Israel",
-        phone="+972-3-0000000",
-        website=None,
-        lat=32.0853,
-        lng=34.7818,
-        city="tel aviv",
-    ),
-    SupportLocation(
-        id=11,
-        name="Tel Aviv City Psychology Clinic",
-        address="Tel Aviv, Israel",
-        phone="+972-3-0001111",
-        website=None,
-        lat=32.08,
-        lng=34.78,
-        city="tel aviv",
-    ),
-    SupportLocation(
-        id=12,
-        name="Ramat Gan Counseling Center",
-        address="Ramat Gan, Israel",
-        phone="+972-3-0002222",
-        website=None,
-        lat=32.08,
-        lng=34.82,
-        city="ramat gan",
-    ),
-    SupportLocation(
-        id=13,
-        name="Bnei Brak Family Therapy Clinic",
-        address="Bnei Brak, Israel",
-        phone="+972-3-0003333",
-        website=None,
-        lat=32.08,
-        lng=34.83,
-        city="bnei brak",
-    ),
-    SupportLocation(
-        id=14,
-        name="Holon Mental Health Service",
-        address="Holon, Israel",
-        phone="+972-3-0004444",
-        website=None,
-        lat=32.01,
-        lng=34.77,
-        city="holon",
-    ),
-    SupportLocation(
-        id=15,
-        name="Bat Yam Psychology Clinic",
-        address="Bat Yam, Israel",
-        phone="+972-3-0005555",
-        website=None,
-        lat=32.02,
-        lng=34.75,
-        city="bat yam",
-    ),
-    SupportLocation(
-        id=16,
-        name="Herzliya Counseling & Support",
-        address="Herzliya, Israel",
-        phone="+972-9-0000000",
-        website=None,
-        lat=32.16,
-        lng=34.84,
-        city="herzliya",
-    ),
-    SupportLocation(
-        id=17,
-        name="Netanya Psychological Services",
-        address="Netanya, Israel",
-        phone="+972-9-0001111",
-        website=None,
-        lat=32.32,
-        lng=34.86,
-        city="netanya",
-    ),
-
-    # ---------- CENTRAL DISTRICT ----------
-    SupportLocation(
-        id=20,
-        name="Rishon LeZion Mental Health Clinic",
-        address="Rishon LeZion, Israel",
-        phone="+972-3-0006666",
-        website=None,
-        lat=31.97,
-        lng=34.79,
-        city="rishon lezion",
-    ),
-    SupportLocation(
-        id=21,
-        name="Petah Tikva Counseling Center",
-        address="Petah Tikva, Israel",
-        phone="+972-3-0007777",
-        website=None,
-        lat=32.09,
-        lng=34.88,
-        city="petah tikva",
-    ),
-    SupportLocation(
-        id=22,
-        name="Kfar Saba Mental Health Service",
-        address="Kfar Saba, Israel",
-        phone="+972-9-0002222",
-        website=None,
-        lat=32.18,
-        lng=34.91,
-        city="kfar saba",
-    ),
-    SupportLocation(
-        id=23,
-        name="Ra'anana Psychology Clinic",
-        address="Ra'anana, Israel",
-        phone="+972-9-0003333",
-        website=None,
-        lat=32.19,
-        lng=34.87,
-        city="raanana",
-    ),
-    SupportLocation(
-        id=24,
-        name="Rehovot Counseling Center",
-        address="Rehovot, Israel",
-        phone="+972-8-0000000",
-        website=None,
-        lat=31.89,
-        lng=34.81,
-        city="rehovot",
-    ),
-    SupportLocation(
-        id=25,
-        name="Lod Family Therapy Clinic",
-        address="Lod, Israel",
-        phone="+972-8-0001111",
-        website=None,
-        lat=31.95,
-        lng=34.89,
-        city="lod",
-    ),
-    SupportLocation(
-        id=26,
-        name="Ramla Psychological Services",
-        address="Ramla, Israel",
-        phone="+972-8-0002222",
-        website=None,
-        lat=31.93,
-        lng=34.86,
-        city="ramla",
-    ),
-    SupportLocation(
-        id=27,
-        name="Modiin-Maccabim-Reut Counseling Center",
-        address="Modiin-Maccabim-Reut, Israel",
-        phone="+972-8-0003333",
-        website=None,
-        lat=31.90,
-        lng=35.01,
-        city="modiin",
-    ),
-
-    # ---------- JERUSALEM AREA ----------
-    SupportLocation(
-        id=30,
-        name="Jerusalem Psychological Services",
-        address="Jerusalem, Israel",
-        phone="+972-2-0000000",
-        website=None,
-        lat=31.7683,
-        lng=35.2137,
-        city="jerusalem",
-    ),
-    SupportLocation(
-        id=31,
-        name="Jerusalem Youth Counseling Clinic",
-        address="Jerusalem, Israel",
-        phone="+972-2-0001111",
-        website=None,
-        lat=31.77,
-        lng=35.22,
-        city="jerusalem",
-    ),
-    SupportLocation(
-        id=32,
-        name="Ma'ale Adumim Mental Health Service",
-        address="Ma'ale Adumim, Israel",
-        phone="+972-2-0002222",
-        website=None,
-        lat=31.78,
-        lng=35.30,
-        city="maale adumim",
-    ),
-
-    # ---------- SOUTH (NEGEV) ----------
-    SupportLocation(
-        id=40,
-        name="Be'er Sheva Mental Health Center",
-        address="Be'er Sheva, Israel",
-        phone="+972-8-0000000",
-        website=None,
-        lat=31.252,
-        lng=34.791,
-        city="beer sheva",
-    ),
-    SupportLocation(
-        id=41,
-        name="Negev Counseling Clinic",
-        address="Be'er Sheva, Israel",
-        phone="+972-8-0001111",
-        website=None,
-        lat=31.25,
-        lng=34.79,
-        city="beer sheva",
-    ),
-    SupportLocation(
-        id=42,
-        name="Ashdod Psychological Services",
-        address="Ashdod, Israel",
-        phone="+972-8-0002222",
-        website=None,
-        lat=31.80,
-        lng=34.65,
-        city="ashdod",
-    ),
-    SupportLocation(
-        id=43,
-        name="Ashkelon Counseling Center",
-        address="Ashkelon, Israel",
-        phone="+972-8-0003333",
-        website=None,
-        lat=31.67,
-        lng=34.57,
-        city="ashkelon",
-    ),
-    SupportLocation(
-        id=44,
-        name="Eilat Mental Health Clinic",
-        address="Eilat, Israel",
-        phone="+972-8-0004444",
-        website=None,
-        lat=29.558,
-        lng=34.95,
-        city="eilat",
-    ),
-
-    # ---------- NORTH (GALILEE) ----------
-    SupportLocation(
-        id=50,
-        name="Nazareth Mental Health Service",
-        address="Nazareth, Israel",
-        phone="+972-4-0000000",
-        website=None,
-        lat=32.704,
-        lng=35.303,
-        city="nazareth",
-    ),
-    SupportLocation(
-        id=51,
-        name="Nazareth Family Counseling Center",
-        address="Nazareth, Israel",
-        phone="+972-4-0001111",
-        website=None,
-        lat=32.705,
-        lng=35.30,
-        city="nazareth",
-    ),
-    SupportLocation(
-        id=52,
-        name="Tiberias Psychological Clinic",
-        address="Tiberias, Israel",
-        phone="+972-4-0002222",
-        website=None,
-        lat=32.79,
-        lng=35.53,
-        city="tiberias",
-    ),
-    SupportLocation(
-        id=53,
-        name="Safed Mental Health Service",
-        address="Safed, Israel",
-        phone="+972-4-0003333",
-        website=None,
-        lat=32.97,
-        lng=35.50,
-        city="safed",
-    ),
-    SupportLocation(
-        id=54,
-        name="Acre Counseling Center",
-        address="Acre, Israel",
-        phone="+972-4-0004444",
-        website=None,
-        lat=32.93,
-        lng=35.08,
-        city="acre",
-    ),
-]
+    city: Optional[str] = None
 
 
 def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    """Rough distance in km between two lat/lng points."""
     R = 6371.0
+
     phi1 = math.radians(lat1)
     phi2 = math.radians(lat2)
+
     dphi = math.radians(lat2 - lat1)
     dlambda = math.radians(lon2 - lon1)
 
@@ -383,52 +46,315 @@ def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
         math.sin(dphi / 2) ** 2
         + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
     )
+
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
     return R * c
+
+def build_search_fallbacks(city: str) -> List[SupportLocation]:
+    clean_city = city.strip()
+
+    return [
+        SupportLocation(
+            id=9001,
+            name=f"Psychologists in {clean_city}",
+            address=f"Search real psychologists and clinics in {clean_city}",
+            phone=None,
+            website=f"https://www.google.com/maps/search/psychologist+in+{clean_city.replace(' ', '+')}+Israel",
+            distanceKm=None,
+            lat=None,
+            lng=None,
+            city=clean_city,
+        ),
+        SupportLocation(
+            id=9002,
+            name=f"Mental health clinics in {clean_city}",
+            address=f"Search real mental health clinics in {clean_city}",
+            phone=None,
+            website=f"https://www.google.com/maps/search/mental+health+clinic+in+{clean_city.replace(' ', '+')}+Israel",
+            distanceKm=None,
+            lat=None,
+            lng=None,
+            city=clean_city,
+        ),
+        SupportLocation(
+            id=9003,
+            name=f"Therapists in {clean_city}",
+            address=f"Search real therapists in {clean_city}",
+            phone=None,
+            website=f"https://www.google.com/maps/search/therapist+in+{clean_city.replace(' ', '+')}+Israel",
+            distanceKm=None,
+            lat=None,
+            lng=None,
+            city=clean_city,
+        ),
+    ]
+
+async def nominatim_search(query: str, limit: int = 10) -> List[Dict[str, Any]]:
+    params = {
+        "q": query,
+        "format": "json",
+        "limit": limit,
+        "addressdetails": 1,
+        "extratags": 1,
+    }
+
+    async with httpx.AsyncClient(timeout=15.0, headers=HEADERS) as client:
+        response = await client.get(NOMINATIM_URL, params=params)
+        response.raise_for_status()
+        return response.json()
+
+
+async def geocode_city(city: str) -> Optional[Dict[str, float]]:
+    data = await nominatim_search(f"{city}, Israel", limit=1)
+
+    if not data:
+        return None
+
+    first = data[0]
+
+    return {
+        "lat": float(first["lat"]),
+        "lng": float(first["lon"]),
+    }
+
+
+def convert_nominatim_result(
+    item: Dict[str, Any],
+    origin_lat: Optional[float] = None,
+    origin_lng: Optional[float] = None,
+) -> Optional[SupportLocation]:
+    try:
+        lat = float(item["lat"])
+        lng = float(item["lon"])
+
+        display_name = item.get("display_name", "Psychology / Mental Health Support")
+        address_data = item.get("address", {})
+        extratags = item.get("extratags", {})
+
+        name = (
+            item.get("name")
+            or extratags.get("name")
+            or display_name.split(",")[0]
+            or "Psychology / Mental Health Support"
+        )
+
+        city = (
+            address_data.get("city")
+            or address_data.get("town")
+            or address_data.get("village")
+            or address_data.get("municipality")
+        )
+
+        road = address_data.get("road")
+        house_number = address_data.get("house_number")
+
+        address_parts = []
+
+        if road:
+            if house_number:
+                address_parts.append(f"{road} {house_number}")
+            else:
+                address_parts.append(road)
+
+        if city:
+            address_parts.append(city)
+
+        address = ", ".join(address_parts) if address_parts else display_name
+
+        phone = (
+            extratags.get("phone")
+            or extratags.get("contact:phone")
+            or extratags.get("mobile")
+        )
+
+        website = (
+            extratags.get("website")
+            or extratags.get("contact:website")
+            or extratags.get("url")
+        )
+
+        distance = None
+
+        if origin_lat is not None and origin_lng is not None:
+            distance = round(haversine_km(origin_lat, origin_lng, lat, lng), 1)
+
+        return SupportLocation(
+            id=int(item.get("place_id", 0)),
+            name=name,
+            address=address,
+            phone=phone,
+            website=website,
+            distanceKm=distance,
+            lat=lat,
+            lng=lng,
+            city=city,
+        )
+
+    except Exception:
+        return None
+
+
+async def search_support_by_city(city: str) -> List[SupportLocation]:
+    """
+    Search real public OpenStreetMap/Nominatim data by city.
+    This is more stable than Overpass for your current setup.
+    """
+    coords = await geocode_city(city)
+
+    if coords is None:
+        return []
+
+    queries = [
+        f"psychologist in {city}, Israel",
+        f"psychotherapist in {city}, Israel",
+        f"therapy clinic in {city}, Israel",
+        f"mental health clinic in {city}, Israel",
+        f"פסיכולוג {city}",
+        f"מרפאה לבריאות הנפש {city}",
+    ]
+
+    results: List[SupportLocation] = []
+    seen = set()
+
+    for q in queries:
+        try:
+            log.info("Nominatim support search: %s", q)
+            data = await nominatim_search(q, limit=10)
+
+            for item in data:
+                loc = convert_nominatim_result(
+                    item,
+                    origin_lat=coords["lat"],
+                    origin_lng=coords["lng"],
+                )
+
+                if loc is None:
+                    continue
+
+                if loc.distanceKm is not None and loc.distanceKm > MAX_RADIUS_KM:
+                    continue
+
+                key = (
+                    loc.name.strip().lower(),
+                    round(loc.lat or 0, 5),
+                    round(loc.lng or 0, 5),
+                )
+
+                if key in seen:
+                    continue
+
+                seen.add(key)
+                results.append(loc)
+
+        except Exception as e:
+            log.warning("Nominatim query failed: %s error=%s", q, str(e))
+            continue
+
+    results.sort(key=lambda x: x.distanceKm if x.distanceKm is not None else 9999)
+
+    return results[:20]
+
+
+async def search_support_near_location(lat: float, lng: float) -> List[SupportLocation]:
+    """
+    Search around current location using a reverse style query.
+    Since Nominatim does not support radius like Overpass, we search general
+    mental-health terms and then filter by distance.
+    """
+    queries = [
+        "psychologist Israel",
+        "psychotherapist Israel",
+        "mental health clinic Israel",
+        "therapy clinic Israel",
+        "פסיכולוג ישראל",
+        "מרפאה לבריאות הנפש ישראל",
+    ]
+
+    results: List[SupportLocation] = []
+    seen = set()
+
+    for q in queries:
+        try:
+            log.info("Nominatim nearby support search: %s", q)
+            data = await nominatim_search(q, limit=30)
+
+            for item in data:
+                loc = convert_nominatim_result(
+                    item,
+                    origin_lat=lat,
+                    origin_lng=lng,
+                )
+
+                if loc is None:
+                    continue
+
+                if loc.distanceKm is not None and loc.distanceKm > MAX_RADIUS_KM:
+                    continue
+
+                key = (
+                    loc.name.strip().lower(),
+                    round(loc.lat or 0, 5),
+                    round(loc.lng or 0, 5),
+                )
+
+                if key in seen:
+                    continue
+
+                seen.add(key)
+                results.append(loc)
+
+        except Exception as e:
+            log.warning("Nominatim nearby query failed: %s error=%s", q, str(e))
+            continue
+
+    results.sort(key=lambda x: x.distanceKm if x.distanceKm is not None else 9999)
+
+    return results[:20]
 
 
 @router.get("/support-locations", response_model=List[SupportLocation])
 async def get_support_locations(
     city: Optional[str] = Query(
-        None, description="City name, e.g. 'Haifa'. Optional if lat/lng given."
+        None,
+        description="City name, for example Haifa, Tel Aviv, Jerusalem.",
     ),
     lat: Optional[float] = Query(
-        None, description="Latitude for current-location search."
+        None,
+        description="Latitude for current-location search.",
     ),
     lng: Optional[float] = Query(
-        None, description="Longitude for current-location search."
+        None,
+        description="Longitude for current-location search.",
     ),
 ):
-    # ---- 1. search by city name ----
-    if city:
-        c = city.strip().lower()
-        results = [
-            loc
-            for loc in LOCATIONS
-            if loc.city and c in loc.city.lower()
-        ]
-        return results
+    try:
+        if city:
+            city = city.strip()
 
-    # ---- 2. search near current location ----
-    if lat is not None and lng is not None:
-        scored: List[SupportLocation] = []
+            if not city:
+                return []
 
-        for loc in LOCATIONS:
-            if loc.lat is None or loc.lng is None:
-                continue
+            results = await search_support_by_city(city)
 
-            d = haversine_km(lat, lng, loc.lat, loc.lng)
+            if results:
+                return results
 
-            # ⬅️ skip anything farther than 20 km
-            if d > MAX_RADIUS_KM:
-                continue
+            return build_search_fallbacks(city)
 
-            updated = loc.copy()
-            updated.distanceKm = round(d, 1)
-            scored.append(updated)
+        if lat is not None and lng is not None:
+            return await search_support_near_location(lat, lng)
 
-        scored.sort(key=lambda x: x.distanceKm or 0.0)
-        return scored  # may be [] if nothing within 20 km
+        return []
 
-    # ---- 3. no params ----
-    return []
+    except httpx.HTTPError as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Could not fetch real support locations right now: {str(e)}",
+        )
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Support location search failed: {str(e)}",
+        )

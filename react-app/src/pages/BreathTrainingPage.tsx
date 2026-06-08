@@ -2,7 +2,7 @@
 import React, { useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import logo from "../assets/mendly-logo.jpg";
-
+import HappyPhotoMemoriesButton from "../components/HappyPhotoMemoriesButton";
 // Images for each exercise
 import breathing874Img from "../assets/breathing-874.jpg";            // 1
 import diaphragmaticImg from "../assets/diaphragmatic-breathing.jpg"; // 2
@@ -501,6 +501,8 @@ const BreathTrainingPage: React.FC = () => {
             <div style={{ fontSize: 22 }}>👤</div>
             <div>Profile</div>
           </button>
+
+          <HappyPhotoMemoriesButton navItemStyle={navItemStyle} />
 
           <button
             type="button"

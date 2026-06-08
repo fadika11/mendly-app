@@ -1,7 +1,7 @@
 import type { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
-  appId: 'com.your.app',
+  appId: 'com.fadiandyaqeen.mendly',
   appName: 'Mendly',
   webDir: 'dist',
   server: {
@@ -11,6 +11,12 @@ const config: CapacitorConfig = {
       'localhost',
       '127.0.0.1',
     ],
+  },
+  plugins: {
+    LocalNotifications: {
+      smallIcon: 'ic_launcher_foreground',
+      iconColor: '#6BA7E6',
+    },
   },
 };
 

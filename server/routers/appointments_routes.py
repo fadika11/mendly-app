@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from pydantic import BaseModel
@@ -27,22 +27,35 @@ class IntakePublic(BaseModel):
     created_at: str
 
 
+class AvailabilitySlotCreate(BaseModel):
+    start_at: str
+    end_at: Optional[str] = None
+
+
+class AvailabilitySlotPublic(BaseModel):
+    slot_id: str
+    psychologist_user_id: str
+    start_at: str
+    end_at: Optional[str] = None
+    is_booked: bool
+    appointment_id: Optional[str] = None
+    created_at: Optional[str] = None
+
+
 class AppointmentCreate(BaseModel):
     psychologist_user_id: str
     intake_id: Optional[str] = None
-    start_at: str  # ISO string (DATETIMEOFFSET)
+    availability_slot_id: str
 
 
 class AppointmentPublic(BaseModel):
     appointment_id: str
-
     client_user_id: str
     client_username: Optional[str] = None
     client_email: Optional[str] = None
-
     psychologist_user_id: str
     intake_id: Optional[str]
-
+    availability_slot_id: Optional[str] = None
     start_at: str
     status: str
     notes: Optional[str] = None
@@ -51,7 +64,7 @@ class AppointmentPublic(BaseModel):
 
 
 class AppointmentStatusUpdate(BaseModel):
-    status: str  # approved/rejected/canceled/completed
+    status: str
     notes: Optional[str] = None
 
 
@@ -62,12 +75,192 @@ def _get_role(db: Session, user_id: str) -> str:
         text("SELECT TOP 1 Role FROM dbo.Users WHERE user_id = :uid"),
         {"uid": user_id},
     ).fetchone()
+
     if not row:
         raise HTTPException(status_code=404, detail="User not found")
+
     return row.Role
 
 
-# ===================== (A) Create Intake =====================
+def _appointment_public_from_row(row) -> AppointmentPublic:
+    return AppointmentPublic(
+        appointment_id=str(row.appointment_id),
+        client_user_id=str(row.client_user_id),
+        client_username=getattr(row, "client_username", None),
+        client_email=getattr(row, "client_email", None),
+        psychologist_user_id=str(row.psychologist_user_id),
+        intake_id=str(row.intake_id) if row.intake_id else None,
+        availability_slot_id=str(row.availability_slot_id) if getattr(row, "availability_slot_id", None) else None,
+        start_at=str(row.start_at),
+        status=row.status,
+        notes=row.notes,
+        created_at=str(row.created_at),
+        updated_at=str(row.updated_at) if row.updated_at else None,
+    )
+
+
+def _slot_public_from_row(row) -> AvailabilitySlotPublic:
+    return AvailabilitySlotPublic(
+        slot_id=str(row.slot_id),
+        psychologist_user_id=str(row.psychologist_user_id),
+        start_at=str(row.start_at),
+        end_at=str(row.end_at) if row.end_at else None,
+        is_booked=bool(row.is_booked),
+        appointment_id=str(row.appointment_id) if row.appointment_id else None,
+        created_at=str(row.created_at) if row.created_at else None,
+    )
+
+
+# ===================== Availability Slots =====================
+
+@router.post("/availability", response_model=AvailabilitySlotPublic)
+def create_availability_slot(
+    payload: AvailabilitySlotCreate,
+    user_id: str = Depends(_user_id_from_authorization),
+    db: Session = Depends(get_db),
+):
+    role = _get_role(db, user_id)
+
+    if role != "psychologist":
+        raise HTTPException(status_code=403, detail="Only psychologists can create available slots")
+
+    try:
+        inserted = db.execute(
+            text("""
+                INSERT INTO dbo.PsychologistAvailabilitySlots
+                    (psychologist_user_id, start_at, end_at, is_booked)
+                OUTPUT
+                    inserted.slot_id,
+                    inserted.psychologist_user_id,
+                    inserted.start_at,
+                    inserted.end_at,
+                    inserted.is_booked,
+                    inserted.appointment_id,
+                    inserted.created_at
+                VALUES
+                    (:psy_id, :start_at, :end_at, 0)
+            """),
+            {
+                "psy_id": user_id,
+                "start_at": payload.start_at,
+                "end_at": payload.end_at,
+            },
+        ).fetchone()
+
+        db.commit()
+
+    except Exception as e:
+        db.rollback()
+        msg = str(e)
+
+        if "UQ_PsychologistAvailabilitySlots_PsyStart" in msg or "UNIQUE" in msg.upper():
+            raise HTTPException(status_code=400, detail="This available time already exists")
+
+        raise
+
+    return _slot_public_from_row(inserted)
+
+
+@router.get("/availability/my", response_model=List[AvailabilitySlotPublic])
+def list_my_availability_slots(
+    user_id: str = Depends(_user_id_from_authorization),
+    db: Session = Depends(get_db),
+):
+    role = _get_role(db, user_id)
+
+    if role != "psychologist":
+        raise HTTPException(status_code=403, detail="Only psychologists can view their available slots")
+
+    rows = db.execute(
+        text("""
+            SELECT
+                slot_id,
+                psychologist_user_id,
+                start_at,
+                end_at,
+                is_booked,
+                appointment_id,
+                created_at
+            FROM dbo.PsychologistAvailabilitySlots
+            WHERE psychologist_user_id = :psy_id
+              AND start_at >= DATEADD(day, -1, SYSDATETIMEOFFSET())
+            ORDER BY start_at ASC
+        """),
+        {"psy_id": user_id},
+    ).fetchall()
+
+    return [_slot_public_from_row(r) for r in rows]
+
+
+@router.get("/availability", response_model=List[AvailabilitySlotPublic])
+def list_available_slots_for_user_booking(
+    psychologist_user_id: str,
+    date: str,
+    db: Session = Depends(get_db),
+):
+    rows = db.execute(
+        text("""
+            SELECT
+                slot_id,
+                psychologist_user_id,
+                start_at,
+                end_at,
+                is_booked,
+                appointment_id,
+                created_at
+            FROM dbo.PsychologistAvailabilitySlots
+            WHERE psychologist_user_id = :psy_id
+              AND CONVERT(date, start_at) = CONVERT(date, :day)
+              AND is_booked = 0
+            ORDER BY start_at ASC
+        """),
+        {"psy_id": psychologist_user_id, "day": date},
+    ).fetchall()
+
+    return [_slot_public_from_row(r) for r in rows]
+
+
+@router.delete("/availability/{slot_id}")
+def delete_availability_slot(
+    slot_id: str,
+    user_id: str = Depends(_user_id_from_authorization),
+    db: Session = Depends(get_db),
+):
+    role = _get_role(db, user_id)
+
+    if role != "psychologist":
+        raise HTTPException(status_code=403, detail="Only psychologists can delete available slots")
+
+    slot = db.execute(
+        text("""
+            SELECT TOP 1 slot_id, is_booked
+            FROM dbo.PsychologistAvailabilitySlots
+            WHERE slot_id = :slot_id AND psychologist_user_id = :psy_id
+        """),
+        {"slot_id": slot_id, "psy_id": user_id},
+    ).fetchone()
+
+    if not slot:
+        raise HTTPException(status_code=404, detail="Slot not found")
+
+    if slot.is_booked:
+        raise HTTPException(status_code=400, detail="Cannot delete a slot that is already booked")
+
+    db.execute(
+        text("""
+            DELETE FROM dbo.PsychologistAvailabilitySlots
+            WHERE slot_id = :slot_id AND psychologist_user_id = :psy_id
+        """),
+        {"slot_id": slot_id, "psy_id": user_id},
+    )
+
+    db.commit()
+
+    return {"ok": True}
+
+
+# ===================== Create Intake =====================
+
 @router.post("/intake", response_model=IntakePublic)
 def create_intake(
     payload: IntakeCreate,
@@ -75,6 +268,7 @@ def create_intake(
     db: Session = Depends(get_db),
 ):
     role = _get_role(db, user_id)
+
     if role != "regular":
         raise HTTPException(status_code=403, detail="Only regular users can create intake")
 
@@ -89,6 +283,7 @@ def create_intake(
             "answers_json": json.dumps(payload.answers, ensure_ascii=False),
         },
     )
+
     db.commit()
 
     row = db.execute(
@@ -113,7 +308,8 @@ def create_intake(
     )
 
 
-# ===================== (B) Create Appointment =====================
+# ===================== Create Appointment from saved slot =====================
+
 @router.post("", response_model=AppointmentPublic)
 def create_appointment(
     payload: AppointmentCreate,
@@ -121,70 +317,121 @@ def create_appointment(
     db: Session = Depends(get_db),
 ):
     role = _get_role(db, user_id)
+
     if role != "regular":
         raise HTTPException(status_code=403, detail="Only regular users can request appointments")
 
-    # validate intake belongs to client + same psychologist
     if payload.intake_id:
         chk = db.execute(
             text("""
                 SELECT TOP 1 intake_id
                 FROM dbo.AppointmentIntakes
-                WHERE intake_id = :iid AND client_user_id = :cid AND psychologist_user_id = :pid
+                WHERE intake_id = :iid
+                  AND client_user_id = :cid
+                  AND psychologist_user_id = :pid
             """),
-            {"iid": payload.intake_id, "cid": user_id, "pid": payload.psychologist_user_id},
+            {
+                "iid": payload.intake_id,
+                "cid": user_id,
+                "pid": payload.psychologist_user_id,
+            },
         ).fetchone()
+
         if not chk:
             raise HTTPException(status_code=400, detail="Invalid intake_id for this user/psychologist")
 
-    db.execute(
-        text("""
-            INSERT INTO dbo.Appointments
-            (client_user_id, psychologist_user_id, intake_id, start_at, status)
-            VALUES (:client_id, :psy_id, :intake_id, :start_at, 'requested')
-        """),
-        {
-            "client_id": user_id,
-            "psy_id": payload.psychologist_user_id,
-            "intake_id": payload.intake_id,
-            "start_at": payload.start_at,
-        },
-    )
-    db.commit()
+    try:
+        slot = db.execute(
+            text("""
+                SELECT TOP 1 slot_id, psychologist_user_id, start_at, end_at, is_booked
+                FROM dbo.PsychologistAvailabilitySlots WITH (UPDLOCK, HOLDLOCK)
+                WHERE slot_id = :slot_id
+                  AND psychologist_user_id = :psy_id
+            """),
+            {
+                "slot_id": payload.availability_slot_id,
+                "psy_id": payload.psychologist_user_id,
+            },
+        ).fetchone()
+
+        if not slot:
+            raise HTTPException(status_code=404, detail="Available slot not found")
+
+        if slot.is_booked:
+            raise HTTPException(status_code=400, detail="This appointment time is already booked")
+
+        inserted = db.execute(
+            text("""
+                INSERT INTO dbo.Appointments
+                    (client_user_id, psychologist_user_id, intake_id, availability_slot_id, start_at, status)
+                OUTPUT inserted.appointment_id
+                VALUES
+                    (:client_id, :psy_id, :intake_id, :slot_id, :start_at, 'requested')
+            """),
+            {
+                "client_id": user_id,
+                "psy_id": payload.psychologist_user_id,
+                "intake_id": payload.intake_id,
+                "slot_id": payload.availability_slot_id,
+                "start_at": slot.start_at,
+            },
+        ).fetchone()
+
+        appointment_id = inserted.appointment_id
+
+        db.execute(
+            text("""
+                UPDATE dbo.PsychologistAvailabilitySlots
+                SET is_booked = 1,
+                    appointment_id = :appointment_id
+                WHERE slot_id = :slot_id
+            """),
+            {
+                "appointment_id": appointment_id,
+                "slot_id": payload.availability_slot_id,
+            },
+        )
+
+        db.commit()
+
+    except HTTPException:
+        db.rollback()
+        raise
+
+    except Exception:
+        db.rollback()
+        raise
 
     row = db.execute(
         text("""
             SELECT TOP 1
-                a.appointment_id, a.client_user_id, a.psychologist_user_id, a.intake_id,
-                a.start_at, a.status, a.notes, a.created_at, a.updated_at,
-                u.Username AS client_username, u.Email AS client_email
+                a.appointment_id,
+                a.client_user_id,
+                a.psychologist_user_id,
+                a.intake_id,
+                a.availability_slot_id,
+                a.start_at,
+                a.status,
+                a.notes,
+                a.created_at,
+                a.updated_at,
+                u.Username AS client_username,
+                u.Email AS client_email
             FROM dbo.Appointments a
             JOIN dbo.Users u ON u.user_id = a.client_user_id
-            WHERE a.client_user_id = :client_id AND a.psychologist_user_id = :psy_id
-            ORDER BY a.created_at DESC
+            WHERE a.appointment_id = :appointment_id
         """),
-        {"client_id": user_id, "psy_id": payload.psychologist_user_id},
+        {"appointment_id": appointment_id},
     ).fetchone()
 
     if not row:
         raise HTTPException(status_code=500, detail="Appointment created but not found")
 
-    return AppointmentPublic(
-        appointment_id=str(row.appointment_id),
-        client_user_id=str(row.client_user_id),
-        client_username=row.client_username,
-        client_email=row.client_email,
-        psychologist_user_id=str(row.psychologist_user_id),
-        intake_id=str(row.intake_id) if row.intake_id else None,
-        start_at=str(row.start_at),
-        status=row.status,
-        notes=row.notes,
-        created_at=str(row.created_at),
-        updated_at=str(row.updated_at) if row.updated_at else None,
-    )
+    return _appointment_public_from_row(row)
 
 
-# ===================== (C) Psychologist: list requests =====================
+# ===================== Psychologist: list requests =====================
+
 @router.get("/psy", response_model=List[AppointmentPublic])
 def list_psy_appointments(
     status_filter: Optional[str] = None,
@@ -192,6 +439,7 @@ def list_psy_appointments(
     db: Session = Depends(get_db),
 ):
     role = _get_role(db, user_id)
+
     if role != "psychologist":
         raise HTTPException(status_code=403, detail="Only psychologists can view this")
 
@@ -201,6 +449,7 @@ def list_psy_appointments(
             a.client_user_id,
             a.psychologist_user_id,
             a.intake_id,
+            a.availability_slot_id,
             a.start_at,
             a.status,
             a.notes,
@@ -213,6 +462,7 @@ def list_psy_appointments(
             ON u.user_id = a.client_user_id
         WHERE a.psychologist_user_id = :pid
     """
+
     params = {"pid": user_id}
 
     if status_filter:
@@ -223,25 +473,11 @@ def list_psy_appointments(
 
     rows = db.execute(text(q), params).fetchall()
 
-    return [
-        AppointmentPublic(
-            appointment_id=str(r.appointment_id),
-            client_user_id=str(r.client_user_id),
-            client_username=r.client_username,
-            client_email=r.client_email,
-            psychologist_user_id=str(r.psychologist_user_id),
-            intake_id=str(r.intake_id) if r.intake_id else None,
-            start_at=str(r.start_at),
-            status=r.status,
-            notes=r.notes,
-            created_at=str(r.created_at),
-            updated_at=str(r.updated_at) if r.updated_at else None,
-        )
-        for r in rows
-    ]
+    return [_appointment_public_from_row(r) for r in rows]
 
 
-# ===================== (D) Psychologist: view intake answers =====================
+# ===================== Psychologist: view intake answers =====================
+
 @router.get("/intake/{intake_id}", response_model=IntakePublic)
 def get_intake(
     intake_id: str,
@@ -249,6 +485,7 @@ def get_intake(
     db: Session = Depends(get_db),
 ):
     role = _get_role(db, user_id)
+
     if role != "psychologist":
         raise HTTPException(status_code=403, detail="Only psychologists can view intakes")
 
@@ -273,7 +510,8 @@ def get_intake(
     )
 
 
-# ===================== (E) Psychologist: approve/reject =====================
+# ===================== Psychologist: approve/reject =====================
+
 @router.put("/{appointment_id}/status", response_model=AppointmentPublic)
 def update_appointment_status(
     appointment_id: str,
@@ -282,14 +520,15 @@ def update_appointment_status(
     db: Session = Depends(get_db),
 ):
     role = _get_role(db, user_id)
+
     if role != "psychologist":
         raise HTTPException(status_code=403, detail="Only psychologists can update status")
 
     allowed = {"approved", "rejected", "canceled", "completed"}
+
     if payload.status not in allowed:
         raise HTTPException(status_code=400, detail=f"Invalid status. Allowed: {sorted(allowed)}")
 
-    # update appointment
     db.execute(
         text("""
             UPDATE dbo.Appointments
@@ -298,17 +537,49 @@ def update_appointment_status(
                 updated_at = SYSDATETIMEOFFSET()
             WHERE appointment_id = :aid AND psychologist_user_id = :pid
         """),
-        {"st": payload.status, "notes": payload.notes, "aid": appointment_id, "pid": user_id},
+        {
+            "st": payload.status,
+            "notes": payload.notes,
+            "aid": appointment_id,
+            "pid": user_id,
+        },
     )
+
+    if payload.status in {"rejected", "canceled"}:
+        db.execute(
+            text("""
+                UPDATE s
+                SET s.is_booked = 0,
+                    s.appointment_id = NULL
+                FROM dbo.PsychologistAvailabilitySlots s
+                JOIN dbo.Appointments a
+                  ON a.availability_slot_id = s.slot_id
+                WHERE a.appointment_id = :aid
+                  AND a.psychologist_user_id = :pid
+            """),
+            {
+                "aid": appointment_id,
+                "pid": user_id,
+            },
+        )
+
     db.commit()
 
-    # reload appointment + client info
     row = db.execute(
         text("""
             SELECT TOP 1
-                a.appointment_id, a.client_user_id, a.psychologist_user_id, a.intake_id,
-                a.start_at, a.status, a.notes, a.created_at, a.updated_at,
-                u.Username AS client_username, u.Email AS client_email
+                a.appointment_id,
+                a.client_user_id,
+                a.psychologist_user_id,
+                a.intake_id,
+                a.availability_slot_id,
+                a.start_at,
+                a.status,
+                a.notes,
+                a.created_at,
+                a.updated_at,
+                u.Username AS client_username,
+                u.Email AS client_email
             FROM dbo.Appointments a
             JOIN dbo.Users u ON u.user_id = a.client_user_id
             WHERE a.appointment_id = :aid
@@ -319,7 +590,6 @@ def update_appointment_status(
     if not row:
         raise HTTPException(status_code=404, detail="Appointment not found")
 
-    # ===== send email =====
     if payload.status in {"approved", "rejected"} and row.client_email:
         if payload.status == "approved":
             subject = "Your appointment has been approved"
@@ -347,16 +617,4 @@ Mendly Team
 
         send_email(row.client_email, subject, body)
 
-    return AppointmentPublic(
-        appointment_id=str(row.appointment_id),
-        client_user_id=str(row.client_user_id),
-        client_username=row.client_username,
-        client_email=row.client_email,
-        psychologist_user_id=str(row.psychologist_user_id),
-        intake_id=str(row.intake_id) if row.intake_id else None,
-        start_at=str(row.start_at),
-        status=row.status,
-        notes=row.notes,
-        created_at=str(row.created_at),
-        updated_at=str(row.updated_at) if row.updated_at else None,
-    )
+    return _appointment_public_from_row(row)

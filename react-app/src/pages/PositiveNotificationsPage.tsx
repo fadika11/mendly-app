@@ -1,6 +1,8 @@
 // react-app/src/pages/PositiveNotificationsPage.tsx
 import React, { useState, useEffect, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
+import { Capacitor } from "@capacitor/core";
+import { LocalNotifications } from "@capacitor/local-notifications";
 import logo from "../assets/mendly-logo.jpg";
 import {
   getPositiveNotificationSettings,
@@ -8,17 +10,21 @@ import {
   getMoodSeries,
   type SeriesPoint,
 } from "../api/auth";
+import HappyPhotoMemoriesButton from "../components/HappyPhotoMemoriesButton";
 
-// 🔹 API base for calling backend directly
-const isNative = (window as any).Capacitor?.isNativePlatform?.() ?? false;
-  const API_BASE =
-    isNative
-      ? "http://10.0.2.2:8000"                   // emulator → host machine
-      : (import.meta.env.VITE_API_URL as string | undefined) ??
-        "http://localhost:8000";
+// ===== platform / api =====
+const isNative = Capacitor.isNativePlatform();
+const API_BASE = isNative
+  ? "http://10.0.2.2:8000"
+  : (import.meta.env.VITE_API_URL as string | undefined) ?? "http://localhost:8000";
 
-// 🔹 Test messages for the "Send test" button
-const TEST_POSITIVE_MESSAGES: string[] = [
+// ===== local notification constants =====
+const POSITIVE_CHANNEL_ID = "positive-notifications";
+const POSITIVE_NOTIFICATION_IDS_START = 5000;
+const POSITIVE_NOTIFICATION_COUNT = 30;
+
+// ===== messages =====
+const POSITIVE_MESSAGES: string[] = [
   "Take one slow deep breath. You’re doing better than you think 🌱",
   "Mini reset: roll your shoulders, unclench your jaw, sip some water 💧",
   "You’ve already handled so much. One small step is enough for now 💛",
@@ -29,14 +35,134 @@ const TEST_POSITIVE_MESSAGES: string[] = [
   "You deserve rest, not just productivity. Take a gentle break when you can 💤",
   "Notice one thing you appreciate about yourself right now ✨",
   "You’re allowed to start again, as many times as you need 🌈",
+  "You are stronger than this hard moment.",
+  "A quiet step forward still counts.",
+  "Protect your peace one choice at a time.",
+  "You deserve patience from yourself too.",
+  "A calmer moment can start with one breath.",
 ];
 
-function getRandomPositiveMessage(): string {
-  if (!TEST_POSITIVE_MESSAGES.length) {
-    return "You’re doing better than you think 🌱";
+function shuffle<T>(arr: T[]): T[] {
+  const copy = [...arr];
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
   }
-  const idx = Math.floor(Math.random() * TEST_POSITIVE_MESSAGES.length);
-  return TEST_POSITIVE_MESSAGES[idx];
+  return copy;
+}
+
+function getRandomPositiveMessage(): string {
+  return POSITIVE_MESSAGES[Math.floor(Math.random() * POSITIVE_MESSAGES.length)];
+}
+
+async function ensureLocalNotificationPermission(): Promise<boolean> {
+  if (!Capacitor.isNativePlatform()) return false;
+
+  const perm = await LocalNotifications.requestPermissions();
+  return perm.display === "granted";
+}
+
+async function ensurePositiveChannel() {
+  if (!Capacitor.isNativePlatform()) return;
+
+  await LocalNotifications.createChannel({
+    id: POSITIVE_CHANNEL_ID,
+    name: "Positive Notifications",
+    description: "Encouraging reminders from Mendly",
+    importance: 4,
+    visibility: 1,
+    vibration: true,
+    lights: true,
+  });
+}
+
+async function cancelScheduledPositiveNotifications() {
+  if (!Capacitor.isNativePlatform()) return;
+
+  const pending = await LocalNotifications.getPending();
+  const ids = pending.notifications
+    .filter(
+      (n) =>
+        n.id >= POSITIVE_NOTIFICATION_IDS_START &&
+        n.id < POSITIVE_NOTIFICATION_IDS_START + POSITIVE_NOTIFICATION_COUNT + 10
+    )
+    .map((n) => ({ id: n.id }));
+
+  if (ids.length > 0) {
+    await LocalNotifications.cancel({ notifications: ids });
+  }
+}
+
+async function schedulePositiveNotificationsOnDevice(
+  frequencyMinutes: number,
+  enabled: boolean
+) {
+  if (!Capacitor.isNativePlatform()) return;
+
+  await cancelScheduledPositiveNotifications();
+
+  if (!enabled) return;
+
+  const granted = await ensureLocalNotificationPermission();
+  if (!granted) {
+    throw new Error("Notifications permission not granted on this device.");
+  }
+
+  await ensurePositiveChannel();
+
+  const messages = shuffle(POSITIVE_MESSAGES);
+  const now = Date.now();
+
+  const notifications = Array.from({ length: POSITIVE_NOTIFICATION_COUNT }, (_, i) => {
+    const at = new Date(now + frequencyMinutes * 60 * 1000 * (i + 1));
+    const body = messages[i % messages.length];
+
+    return {
+      id: POSITIVE_NOTIFICATION_IDS_START + i,
+      title: "Mendly",
+      body,
+      schedule: { at },
+      channelId: POSITIVE_CHANNEL_ID,
+      smallIcon: "ic_launcher_foreground",
+      extra: {
+        type: "positive",
+        index: i,
+      },
+    };
+  });
+
+  await LocalNotifications.schedule({ notifications });
+}
+
+async function sendTestPositiveNotificationNow() {
+  if (!Capacitor.isNativePlatform()) {
+    throw new Error("Test local notifications work on native Android/iOS only.");
+  }
+
+  const granted = await ensureLocalNotificationPermission();
+  if (!granted) {
+    throw new Error("Notifications permission not granted on this device.");
+  }
+
+  await ensurePositiveChannel();
+
+  await LocalNotifications.schedule({
+    notifications: [
+      {
+        id: 900001,
+        title: "Mendly Test Notification",
+        body: getRandomPositiveMessage(),
+        schedule: { at: new Date(Date.now() + 2000) },
+        channelId: POSITIVE_CHANNEL_ID,
+
+        smallIcon: "ic_launcher_foreground",
+        largeIcon: "mendly_logo",
+        iconColor: "#6BA7E6",
+
+        extra: { type: "positive-test" },
+      },
+    ],
+  });
 }
 
 const PositiveNotificationsPage: React.FC = () => {
@@ -58,7 +184,6 @@ const PositiveNotificationsPage: React.FC = () => {
   const [moodError, setMoodError] = useState<string | null>(null);
   const [series7, setSeries7] = useState<SeriesPoint[] | null>(null);
 
-  // ---------- helpers copied from WeeklyMotivationPage ----------
   function isoDateUTC(d: Date): string {
     const y = d.getUTCFullYear();
     const m = String(d.getUTCMonth() + 1).padStart(2, "0");
@@ -107,7 +232,6 @@ const PositiveNotificationsPage: React.FC = () => {
     return out;
   }
 
-  // 🔁 Load notification settings on mount
   useEffect(() => {
     let isMounted = true;
 
@@ -118,6 +242,13 @@ const PositiveNotificationsPage: React.FC = () => {
 
         setEnabled(data.enabled);
         setFrequency(String(data.frequency_minutes));
+
+        if (Capacitor.isNativePlatform()) {
+          await schedulePositiveNotificationsOnDevice(
+            data.frequency_minutes,
+            data.enabled
+          );
+        }
       } catch (e: any) {
         console.error("Failed to load positive notification settings:", e);
         if (isMounted) {
@@ -135,7 +266,6 @@ const PositiveNotificationsPage: React.FC = () => {
     };
   }, []);
 
-  // 🔁 Load mood data for last 7 days (for motivation notes)
   useEffect(() => {
     (async () => {
       try {
@@ -154,7 +284,6 @@ const PositiveNotificationsPage: React.FC = () => {
     })();
   }, []);
 
-  // ---------- compute avg + hasData (same logic as WeeklyMotivationPage) ----------
   const { avg7, hasData } = useMemo(() => {
     if (!series7 || !series7.length) {
       return { avg7: null as number | null, hasData: false };
@@ -180,7 +309,6 @@ const PositiveNotificationsPage: React.FC = () => {
     return last.avg_score != null;
   }, [series7]);
 
-  // ---------- motivation text (same logic as WeeklyMotivationPage) ----------
   const buildNotes = () => {
     if (!hasData) {
       return {
@@ -213,7 +341,7 @@ const PositiveNotificationsPage: React.FC = () => {
         title: "It looks like this week has been heavy",
         bullets: [
           "You’ve been carrying a lot emotionally. That says nothing bad about you — it just means you’re human.",
-          "Right now, the goal isn’t to “fix everything” — it’s to make this moment a little more gentle.",
+          "Right now, the goal isn’t to fix everything — it’s to make this moment a little more gentle.",
           "Tiny actions count: a short walk, texting one safe person, a few calm breaths, or even just drinking water.",
           "You deserve support. If things feel overwhelming, talking to a professional or someone you trust can really help.",
         ],
@@ -229,7 +357,7 @@ const PositiveNotificationsPage: React.FC = () => {
           "Your week seems to have had ups and downs — which is completely normal.",
           "Notice what helped on the better days: people, habits, music, sleep, or small routines.",
           "You can gently add a bit more of what helped, and a bit less of what drained you.",
-          "You don’t have to be “positive” all the time — being honest with yourself is already progress.",
+          "You don’t have to be positive all the time — being honest with yourself is already progress.",
         ],
         footer:
           "These notes are based on an in-between mood week. Keep listening to yourself, and remember that slow, steady care can make a real difference over time.",
@@ -241,7 +369,7 @@ const PositiveNotificationsPage: React.FC = () => {
       bullets: [
         "Your recent mood has been on the positive side — that’s wonderful to see.",
         "Notice what has been supporting you: routines, people, boundaries, or choices that protect your energy.",
-        "You can treat this as “evidence” that you’re capable of creating good days for yourself.",
+        "You can treat this as evidence that you’re capable of creating good days for yourself.",
         "Even when tougher days return, these last 7 days show that better moments are possible for you.",
       ],
       footer:
@@ -251,18 +379,23 @@ const PositiveNotificationsPage: React.FC = () => {
 
   const notes = buildNotes();
 
-  // ===== HANDLERS =====
   const handleUpdateClick = async () => {
     setSaving(true);
     setStatusMsg(null);
+
     try {
       const minutes = parseInt(frequency, 10);
-      const payload = {
-        enabled,
-        frequency_minutes: isNaN(minutes) ? 60 : minutes,
-      };
+      const safeMinutes = isNaN(minutes) ? 60 : minutes;
 
-      await updatePositiveNotificationSettings(payload);
+      await updatePositiveNotificationSettings({
+        enabled,
+        frequency_minutes: safeMinutes,
+      });
+
+      if (Capacitor.isNativePlatform()) {
+        await schedulePositiveNotificationsOnDevice(safeMinutes, enabled);
+      }
+
       setStatusMsg("Settings updated ✅");
     } catch (e: any) {
       console.error("Failed to update positive notifications:", e);
@@ -272,12 +405,18 @@ const PositiveNotificationsPage: React.FC = () => {
     }
   };
 
-  // 🔹 ask backend to enqueue a test positive notification (FCM push)
   const handleSendTestClick = async () => {
     try {
+      if (Capacitor.isNativePlatform()) {
+        await sendTestPositiveNotificationNow();
+        setStatusMsg("Test notification scheduled ✅ Check your device in 2 seconds.");
+        return;
+      }
+
+      // optional backend fallback for web/browser testing
       const token = window.localStorage.getItem("access_token");
       if (!token) {
-        alert("You must be logged in to send a test notification.");
+        setStatusMsg("Test notifications on browser need login.");
         return;
       }
 
@@ -299,13 +438,12 @@ const PositiveNotificationsPage: React.FC = () => {
       } else {
         setStatusMsg("Test notification enqueued ✅ Check your device.");
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error("Error sending test notification:", err);
-      setStatusMsg("Error sending test notification.");
+      setStatusMsg(err?.message || "Error sending test notification.");
     }
   };
 
-  // ===== STYLES (unchanged, plus a few for motivation card) =====
   const screenStyle: React.CSSProperties = {
     height: "100vh",
     width: "100vw",
@@ -400,7 +538,6 @@ const PositiveNotificationsPage: React.FC = () => {
     boxSizing: "border-box",
   };
 
-  // 🔹 NEW: motivation notes card styles (adapted from WeeklyMotivationPage)
   const motivationCardStyle: React.CSSProperties = {
     width: "100%",
     background:
@@ -413,7 +550,7 @@ const PositiveNotificationsPage: React.FC = () => {
     fontSize: 14,
     lineHeight: 1.6,
     boxSizing: "border-box",
-    marginTop:10,
+    marginTop: 10,
   };
 
   const motivationHeaderRowStyle: React.CSSProperties = {
@@ -594,36 +731,36 @@ const PositiveNotificationsPage: React.FC = () => {
   };
 
   const logoBlockStyle: React.CSSProperties = {
-      display: "flex",
-      flexDirection: "column",
-      alignItems: "center",
-      gap: 4,
-    };
-  
-    const logoCircleStyle: React.CSSProperties = {
-      width: 40,
-      height: 40,
-      borderRadius: "50%",
-      overflow: "hidden",
-      backgroundColor: CREAM,
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      boxShadow: "0 4px 10px rgba(0,0,0,0.15)",
-    };
-  
-    const logoImgStyle: React.CSSProperties = {
-      width: "130%",
-      height: "130%",
-      objectFit: "cover",
-    };
-  
-    const appNameStyle: React.CSSProperties = {
-      fontSize: 12,
-      fontWeight: 600,
-      color: "#5F8DD0",
-      letterSpacing: 0.5,
-    };
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    gap: 4,
+  };
+
+  const logoCircleStyle: React.CSSProperties = {
+    width: 40,
+    height: 40,
+    borderRadius: "50%",
+    overflow: "hidden",
+    backgroundColor: CREAM,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    boxShadow: "0 4px 10px rgba(0,0,0,0.15)",
+  };
+
+  const logoImgStyle: React.CSSProperties = {
+    width: "130%",
+    height: "130%",
+    objectFit: "cover",
+  };
+
+  const appNameStyle: React.CSSProperties = {
+    fontSize: 12,
+    fontWeight: 600,
+    color: "#5F8DD0",
+    letterSpacing: 0.5,
+  };
 
   const describeFrequency = (value: string): string => {
     switch (value) {
@@ -667,7 +804,6 @@ const PositiveNotificationsPage: React.FC = () => {
   return (
     <div style={screenStyle}>
       <div style={phoneStyle}>
-        {/* HEADER */}
         <div style={topSectionStyle}>
           <button
             type="button"
@@ -703,17 +839,13 @@ const PositiveNotificationsPage: React.FC = () => {
           </button>
         </div>
 
-        {/* CONTENT */}
         <div style={bottomSectionStyle}>
           <div style={innerContentStyle}>
-            {/* 🔹 Weekly motivation notes (replaces the old image) */}
             <div style={motivationCardStyle}>
               <div style={motivationHeaderRowStyle}>
                 <div style={motivationTitleStyle}>Your weekly motivation</div>
                 {hasData && avg7 !== null && (
-                  <div style={motivationChipStyle}>
-                    7-day avg: {avg7} / 10
-                  </div>
+                  <div style={motivationChipStyle}>7-day avg: {avg7} / 10</div>
                 )}
               </div>
 
@@ -748,7 +880,6 @@ const PositiveNotificationsPage: React.FC = () => {
               )}
             </div>
 
-            {/* 🔹 Existing notification settings card (unchanged, just moved under notes) */}
             <div style={cardStyle}>
               <div>
                 <div style={labelStyle}>
@@ -785,13 +916,10 @@ const PositiveNotificationsPage: React.FC = () => {
 
               <div style={helperTextStyle}>
                 {enabled
-                  ? `You will receive positive notifications ${describeFrequency(
-                      frequency
-                    )}.`
+                  ? `You will receive positive notifications ${describeFrequency(frequency)}.`
                   : "Positive notifications are turned off. Turn them on to start receiving them again."}
               </div>
 
-              {/* UPDATE BUTTON */}
               <button
                 type="button"
                 style={updateButtonStyle}
@@ -801,7 +929,6 @@ const PositiveNotificationsPage: React.FC = () => {
                 {saving ? "Updating…" : "Update"}
               </button>
 
-              {/* TEST BUTTON → sends FCM push via backend */}
               <button
                 type="button"
                 style={testButtonStyle}
@@ -815,27 +942,28 @@ const PositiveNotificationsPage: React.FC = () => {
           </div>
         </div>
 
-        {/* BOTTOM NAV */}
         <div style={bottomNavStyle}>
-          <div
+          <button
+            type="button"
             style={navItemStyle}
             onClick={() => navigate("/profile")}
-            role="button"
             aria-label="Profile"
           >
             <div style={{ fontSize: 22 }}>👤</div>
             <div>Profile</div>
-          </div>
+          </button>
 
-          <div
+          <HappyPhotoMemoriesButton navItemStyle={navItemStyle} />
+
+          <button
+            type="button"
             style={navItemStyle}
             onClick={() => navigate("/chat")}
-            role="button"
             aria-label="AI Chat"
           >
             <div style={{ fontSize: 22 }}>💬</div>
             <div>Ai Chat</div>
-          </div>
+          </button>
         </div>
       </div>
     </div>

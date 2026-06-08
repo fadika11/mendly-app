@@ -1,8 +1,7 @@
 # server/schemas.py
-from typing import Optional
+from typing import Optional, List
 from pydantic import BaseModel, constr, Field, EmailStr
 from datetime import date
-from typing import List
 
 UsernameStr = constr(min_length=3, max_length=120)
 PasswordStr = constr(min_length=6, max_length=128)
@@ -24,7 +23,6 @@ class UserLogin(BaseModel):
     password: PasswordStr  # type: ignore
 
 
-# Forgot-password (email + code + new password)
 class ForgotPasswordStart(BaseModel):
     email: EmailStr
 
@@ -35,9 +33,7 @@ class ForgotPasswordVerify(BaseModel):
     new_password: PasswordStr  # type: ignore
 
 
-# Used for updating profile
 class UserUpdate(BaseModel):
-    # In your frontend you always send these, so they can be required:
     username: UsernameStr  # type: ignore
     email: EmailStr
     age: Optional[int] = Field(default=None, ge=10, le=120)
@@ -50,7 +46,7 @@ class UserPublic(BaseModel):
     email: str
     age: Optional[int]
     gender: Optional[int]
-    role: str   
+    role: str
 
     class Config:
         from_attributes = True
@@ -62,7 +58,6 @@ class Token(BaseModel):
     user_id: str
     role: str
     username: str
-
 
 
 class ChangePassword(BaseModel):
@@ -91,6 +86,7 @@ class DeviceRegister(BaseModel):
     platform: str  # 'android' or 'ios'
     app_version: Optional[str] = None
 
+
 class PsychologistCreate(BaseModel):
     username: UsernameStr  # type: ignore
     email: EmailStr
@@ -98,10 +94,6 @@ class PsychologistCreate(BaseModel):
     age: Optional[int] = Field(default=None, ge=10, le=120)
     gender: Optional[int] = Field(default=0, ge=0, le=3)
 
-    specialty: constr(min_length=2, max_length=120)  # type: ignore
-    workplace: Optional[constr(max_length=200)] = None  # type: ignore
-    city: Optional[constr(max_length=120)] = None  # type: ignore
-    bio: Optional[constr(max_length=500)] = None  # type: ignore
-    years_experience: Optional[int] = Field(default=None, ge=0, le=80)
-    license_number: Optional[constr(max_length=80)] = None  # type: ignore
-
+    # Only required during psychologist signup.
+    # Specialty, workplace, city, years_experience and bio are completed later.
+    license_number: str

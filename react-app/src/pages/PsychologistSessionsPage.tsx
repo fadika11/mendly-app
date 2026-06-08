@@ -1,13 +1,16 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import logo from "../assets/mendly-logo.jpg";
-import { listPsyAppointments, type PsyAppointment } from "../api/auth";
+import {
+  listPsyAppointments,
+  type PsyAppointment,
+} from "../api/auth";
+import PsyAvailabilityButton from "../components/PsyAvailabilityButton";
 
 const PsychologistSessionsPage: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
 
-  // Theme
   const BLUE = "#6BA7E6";
   const CREAM = "#f5e9d9";
   const BTN = "#2a5f97";
@@ -15,10 +18,12 @@ const PsychologistSessionsPage: React.FC = () => {
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
   const [items, setItems] = useState<PsyAppointment[]>([]);
 
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
+
 
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [openIntake, setOpenIntake] = useState<null | { title: string; json: string | null }>(null);
@@ -26,15 +31,13 @@ const PsychologistSessionsPage: React.FC = () => {
   const qs = new URLSearchParams(location.search);
   const clientParam = qs.get("client");
 
-  // ===== Layout styles (phone design like your other pages) =====
   const screenStyle: React.CSSProperties = {
     height: "100vh",
     width: "100vw",
     display: "flex",
     justifyContent: "center",
     backgroundColor: BLUE,
-    fontFamily:
-      '"Poppins", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+    fontFamily: '"Poppins", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
   };
 
   const phoneStyle: React.CSSProperties = {
@@ -45,20 +48,14 @@ const PsychologistSessionsPage: React.FC = () => {
     display: "flex",
     flexDirection: "column",
     overflow: "hidden",
+    position: "relative",
   };
 
   const headerStyle: React.CSSProperties = {
-      backgroundColor: CREAM,
-      padding: "10px 16px",
-      position: "relative",
-      paddingTop: 20,
-        paddingBottom: 16,
-        paddingInline: 16,
-        flexDirection: "row",
-        alignItems: "center",
-        justifyContent: "center",
-        height: "40px",
-    };
+    backgroundColor: CREAM,
+    padding: "20px 16px 16px",
+    height: 40,
+  };
 
   const headerRow: React.CSSProperties = {
     display: "flex",
@@ -81,22 +78,6 @@ const PsychologistSessionsPage: React.FC = () => {
     cursor: "pointer",
   };
 
-  const titleBlockStyle: React.CSSProperties = {
-    display: "flex",
-    flexDirection: "column",
-    gap: 4,
-    alignItems: "center",
-  };
-
-  const smallLabelStyle: React.CSSProperties = {
-    color: "#5F8DD0",
-    fontSize: 18,
-    fontWeight: 600,
-    display: "flex",
-    alignItems: "center",
-    gap: 8,
-  };
-
   const tinyLogoStyle: React.CSSProperties = {
     width: 28,
     height: 28,
@@ -108,34 +89,29 @@ const PsychologistSessionsPage: React.FC = () => {
     justifyContent: "center",
   };
 
-  const brandTextWrap: React.CSSProperties = {
-      display: "flex",
-      flexDirection: "column",
-      alignItems: "center",
-      lineHeight: 1.05,
-      minWidth: 0,
-    };
-  
-    const brandTitle: React.CSSProperties = {
-      color: "#3565AF",
-      fontWeight: 700,
-      fontSize: 18,
-      whiteSpace: "nowrap",
-      overflow: "hidden",
-      textOverflow: "ellipsis",
-    };
-  
-    const brandSubtitle: React.CSSProperties = {
-      color: "#5F8DD0",
-      fontWeight: 640,
-      fontSize: 15,
-      whiteSpace: "nowrap",
-    };
-
   const tinyLogoImgStyle: React.CSSProperties = {
     width: "130%",
     height: "130%",
     objectFit: "cover",
+  };
+
+  const brandTextWrap: React.CSSProperties = {
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    lineHeight: 1.05,
+  };
+
+  const brandTitle: React.CSSProperties = {
+    color: "#3565AF",
+    fontWeight: 700,
+    fontSize: 18,
+  };
+
+  const brandSubtitle: React.CSSProperties = {
+    color: "#5F8DD0",
+    fontWeight: 640,
+    fontSize: 15,
   };
 
   const contentStyle: React.CSSProperties = {
@@ -147,29 +123,23 @@ const PsychologistSessionsPage: React.FC = () => {
     overflowY: "auto",
   };
 
-  const controlsWrap: React.CSSProperties = {
+  const panel: React.CSSProperties = {
     backgroundColor: "rgba(255,255,255,0.25)",
     borderRadius: 18,
-    padding: 10,
+    padding: 12,
     display: "flex",
     flexDirection: "column",
     gap: 10,
   };
 
-  const controlsRow: React.CSSProperties = {
-    display: "flex",
-    gap: 10,
-    alignItems: "center",
-  };
-
   const inputStyle: React.CSSProperties = {
-    flex: 1,
     border: "none",
     outline: "none",
     borderRadius: 999,
     padding: "10px 12px",
     backgroundColor: "rgba(255,255,255,0.9)",
     fontSize: 13,
+    flex: 1,
   };
 
   const selectStyle: React.CSSProperties = {
@@ -194,7 +164,6 @@ const PsychologistSessionsPage: React.FC = () => {
     cursor: "pointer",
   };
 
-  // ===== Appointment card styles =====
   const card: React.CSSProperties = {
     backgroundColor: CREAM,
     borderRadius: 20,
@@ -206,62 +175,11 @@ const PsychologistSessionsPage: React.FC = () => {
     gap: 10,
   };
 
-  const cardTopRow: React.CSSProperties = {
-    display: "flex",
-    justifyContent: "space-between",
-    gap: 10,
-    alignItems: "flex-start",
-  };
-
-  const cardTitle: React.CSSProperties = {
-    fontSize: 15,
-    fontWeight: 900,
-    color: "#0f172a",
-    lineHeight: 1.25,
-  };
-
-  const cardSub: React.CSSProperties = {
-    marginTop: 2,
-    fontSize: 12,
-    opacity: 0.9,
-  };
-
-  const divider: React.CSSProperties = {
-    height: 1,
-    backgroundColor: "rgba(0,0,0,0.08)",
-    marginTop: 2,
-    marginBottom: 2,
-  };
-
-  const infoGrid: React.CSSProperties = {
-    display: "grid",
-    gridTemplateColumns: "1fr 1fr",
-    gap: 10,
-  };
-
-  const infoBox: React.CSSProperties = {
-    backgroundColor: "rgba(255,255,255,0.65)",
-    borderRadius: 14,
-    padding: "10px 10px",
-    fontSize: 12,
-    lineHeight: 1.35,
-  };
-
   const label: React.CSSProperties = {
     fontWeight: 900,
     color: "#3565AF",
     fontSize: 12,
     marginBottom: 3,
-  };
-
-  const notesBox: React.CSSProperties = {
-    backgroundColor: "rgba(255,255,255,0.75)",
-    borderRadius: 14,
-    padding: 10,
-    fontSize: 12,
-    lineHeight: 1.45,
-    whiteSpace: "pre-wrap",
-    wordBreak: "break-word",
   };
 
   const actionRow: React.CSSProperties = {
@@ -288,21 +206,58 @@ const PsychologistSessionsPage: React.FC = () => {
   };
 
   const bottomNav: React.CSSProperties = {
-      backgroundColor: CREAM,
-      padding: "12px 22px",
-      display: "flex",
-      justifyContent: "space-between",
-    };
-  
-    const navItem: React.CSSProperties = {
-      display: "flex",
-      alignItems: "center",
-      gap: 8,
-      fontSize: 18,
-      fontWeight: 700,
-      color: "#3565AF",
-      cursor: "pointer",
-    };
+    backgroundColor: CREAM,
+    padding: "12px 12px",
+    display: "flex",
+    justifyContent: "space-between",
+    gap: 8,
+  };
+
+  const navItem: React.CSSProperties = {
+    flex: 1,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    fontSize: 14,
+    fontWeight: 800,
+    color: "#3565AF",
+    cursor: "pointer",
+    border: "none",
+    backgroundColor: "transparent",
+  };
+
+  const overlayStyle: React.CSSProperties = {
+    position: "absolute",
+    inset: 0,
+    backgroundColor: "rgba(0,0,0,0.45)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 16,
+    zIndex: 9999,
+  };
+
+  const modalStyle: React.CSSProperties = {
+    width: "100%",
+    maxWidth: 420,
+    maxHeight: "85vh",
+    overflowY: "auto",
+    backgroundColor: CREAM,
+    borderRadius: 20,
+    padding: 16,
+    boxShadow: "0 10px 30px rgba(0,0,0,0.25)",
+    display: "flex",
+    flexDirection: "column",
+    gap: 12,
+  };
+
+  const modalTitle: React.CSSProperties = {
+    fontSize: 18,
+    fontWeight: 900,
+    color: "#3565AF",
+    textAlign: "center",
+  };
 
   function badgeStyle(status: string): React.CSSProperties {
     const s = (status || "").toLowerCase();
@@ -340,11 +295,18 @@ const PsychologistSessionsPage: React.FC = () => {
     return "N/A";
   }
 
-  function fmt(dt: string | null) {
+  function formatDbDateTime(dt: string | null) {
     if (!dt) return "—";
-    const d = new Date(dt);
-    if (Number.isNaN(d.getTime())) return dt;
-    return d.toLocaleString();
+
+    const raw = String(dt);
+
+    const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})[T\s](\d{2}):(\d{2})/);
+    if (match) {
+      const [, y, m, d, hh, mm] = match;
+      return `${d}/${m}/${y}, ${hh}:${mm}`;
+    }
+
+    return raw;
   }
 
   function safePretty(jsonStr: string | null) {
@@ -357,20 +319,21 @@ const PsychologistSessionsPage: React.FC = () => {
     }
   }
 
+  async function loadAppointments() {
+    try {
+      setLoading(true);
+      setError(null);
+      const data = await listPsyAppointments();
+      setItems(data);
+    } catch (e: any) {
+      setError(e?.message || "Failed to load appointments");
+    } finally {
+      setLoading(false);
+    }
+  }
+
   useEffect(() => {
-    const run = async () => {
-      try {
-        setLoading(true);
-        setError(null);
-        const data = await listPsyAppointments();
-        setItems(data);
-      } catch (e: any) {
-        setError(e?.message || "Failed to load appointments");
-      } finally {
-        setLoading(false);
-      }
-    };
-    run();
+    loadAppointments();
   }, []);
 
   const filtered = useMemo(() => {
@@ -385,6 +348,7 @@ const PsychologistSessionsPage: React.FC = () => {
     }
 
     const q = search.trim().toLowerCase();
+
     if (q) {
       arr = arr.filter(
         (x) =>
@@ -400,22 +364,19 @@ const PsychologistSessionsPage: React.FC = () => {
   return (
     <div style={screenStyle}>
       <div style={phoneStyle}>
-        {/* HEADER */}
         <div style={headerStyle}>
           <div style={headerRow}>
             <button style={{ ...roundBtn, left: 0 }} onClick={() => navigate("/psy")}>
               🏠
             </button>
 
-            <div style={titleBlockStyle}>
-              <div style={smallLabelStyle}>
-                <span style={tinyLogoStyle}>
-                  <img src={logo} alt="Mendly logo" style={tinyLogoImgStyle} />
-                </span>
-                <div style={brandTextWrap}>
-                  <div style={brandTitle}>Mendly App</div>
-                  <div style={brandSubtitle}>My Sessions</div>
-                </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={tinyLogoStyle}>
+                <img src={logo} alt="Mendly logo" style={tinyLogoImgStyle} />
+              </span>
+              <div style={brandTextWrap}>
+                <div style={brandTitle}>Mendly App</div>
+                <div style={brandSubtitle}>My Sessions</div>
               </div>
             </div>
 
@@ -431,11 +392,9 @@ const PsychologistSessionsPage: React.FC = () => {
           </div>
         </div>
 
-        {/* CONTENT */}
         <div style={contentStyle}>
-          {/* Controls */}
-          <div style={controlsWrap}>
-            <div style={controlsRow}>
+          <div style={panel}>
+            <div style={{ display: "flex", gap: 10 }}>
               <input
                 style={inputStyle}
                 placeholder="Search client / email / notes..."
@@ -458,10 +417,7 @@ const PsychologistSessionsPage: React.FC = () => {
             </div>
 
             {clientParam && (
-              <button
-                style={pillBtn}
-                onClick={() => navigate("/psy/sessions", { replace: true })}
-              >
+              <button style={pillBtn} onClick={() => navigate("/psy/sessions", { replace: true })}>
                 Clear client filter
               </button>
             )}
@@ -485,16 +441,17 @@ const PsychologistSessionsPage: React.FC = () => {
             </div>
           )}
 
-          {/* Cards */}
           {filtered.map((a) => {
             const isOpen = expandedId === a.appointment_id;
 
             return (
               <div key={a.appointment_id} style={card}>
-                <div style={cardTopRow}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
                   <div>
-                    <div style={cardTitle}>{fmt(a.start_at)}</div>
-                    <div style={cardSub}>
+                    <div style={{ fontSize: 15, fontWeight: 900 }}>
+                      {formatDbDateTime(a.start_at)}
+                    </div>
+                    <div style={{ marginTop: 2, fontSize: 12 }}>
                       <b>Client:</b> {a.client_username} • {a.client_email}
                     </div>
                   </div>
@@ -502,23 +459,37 @@ const PsychologistSessionsPage: React.FC = () => {
                   <span style={badgeStyle(a.status)}>{a.status}</span>
                 </div>
 
-                <div style={divider} />
+                <div style={{ height: 1, backgroundColor: "rgba(0,0,0,0.08)" }} />
 
-                <div style={infoGrid}>
-                  <div style={infoBox}>
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "1fr 1fr",
+                    gap: 10,
+                  }}
+                >
+                  <div style={{ backgroundColor: "rgba(255,255,255,0.65)", borderRadius: 14, padding: 10 }}>
                     <div style={label}>Client Info</div>
-                    <div><b>Age:</b> {a.client_age ?? "—"}</div>
-                    <div><b>Gender:</b> {genderLabel(a.client_gender)}</div>
+                    <div>
+                      <b>Age:</b> {a.client_age ?? "—"}
+                    </div>
+                    <div>
+                      <b>Gender:</b> {genderLabel(a.client_gender)}
+                    </div>
                   </div>
 
-                  <div style={infoBox}>
+                  <div style={{ backgroundColor: "rgba(255,255,255,0.65)", borderRadius: 14, padding: 10 }}>
                     <div style={label}>Appointment</div>
-                    <div><b>Intake:</b> {a.intake_id ? "Attached" : "None"}</div>
-                    <div><b>Notes:</b> {a.notes ? "Yes" : "No"}</div>
+                    <div>
+                      <b>Intake:</b> {a.intake_id ? "Attached" : "None"}
+                    </div>
+                    <div>
+                      <b>Notes:</b> {a.notes ? "Yes" : "No"}
+                    </div>
                   </div>
                 </div>
 
-                <div style={notesBox}>
+                <div style={{ backgroundColor: "rgba(255,255,255,0.75)", borderRadius: 14, padding: 10 }}>
                   <div style={label}>Notes</div>
                   {a.notes || "—"}
                 </div>
@@ -529,7 +500,7 @@ const PsychologistSessionsPage: React.FC = () => {
                     disabled={!a.intake_id}
                     onClick={() =>
                       setOpenIntake({
-                        title: `${a.client_username} • ${fmt(a.start_at)}`,
+                        title: `${a.client_username} • ${formatDbDateTime(a.start_at)}`,
                         json: a.intake_answers_json,
                       })
                     }
@@ -537,21 +508,26 @@ const PsychologistSessionsPage: React.FC = () => {
                     View Intake
                   </button>
 
-                  <button
-                    style={ghostBtn}
-                    onClick={() => setExpandedId(isOpen ? null : a.appointment_id)}
-                  >
+                  <button style={ghostBtn} onClick={() => setExpandedId(isOpen ? null : a.appointment_id)}>
                     {isOpen ? "Hide Details" : "More Details"}
                   </button>
                 </div>
 
                 {isOpen && (
-                  <div style={{ ...infoBox, marginTop: 2 }}>
+                  <div style={{ backgroundColor: "rgba(255,255,255,0.65)", borderRadius: 14, padding: 10 }}>
                     <div style={label}>Details</div>
-                    <div><b>Appointment ID:</b> {a.appointment_id}</div>
-                    <div><b>Client ID:</b> {a.client_user_id}</div>
-                    <div><b>Created:</b> {fmt(a.created_at)}</div>
-                    <div><b>Updated:</b> {fmt(a.updated_at)}</div>
+                    <div>
+                      <b>Appointment ID:</b> {a.appointment_id}
+                    </div>
+                    <div>
+                      <b>Client ID:</b> {a.client_user_id}
+                    </div>
+                    <div>
+                      <b>Created:</b> {formatDbDateTime(a.created_at)}
+                    </div>
+                    <div>
+                      <b>Updated:</b> {formatDbDateTime(a.updated_at)}
+                    </div>
                   </div>
                 )}
               </div>
@@ -559,35 +535,10 @@ const PsychologistSessionsPage: React.FC = () => {
           })}
         </div>
 
-        {/* Intake Modal */}
         {openIntake && (
-          <div
-            onClick={() => setOpenIntake(null)}
-            style={{
-              position: "fixed",
-              inset: 0,
-              backgroundColor: "rgba(0,0,0,0.45)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              padding: 16,
-              zIndex: 9999,
-            }}
-          >
-            <div
-              onClick={(e) => e.stopPropagation()}
-              style={{
-                width: "100%",
-                maxWidth: 520,
-                backgroundColor: CREAM,
-                borderRadius: 16,
-                padding: 14,
-                boxShadow: "0 10px 30px rgba(0,0,0,0.25)",
-              }}
-            >
-              <div style={{ fontWeight: 900, color: "#3565AF", marginBottom: 8 }}>
-                Intake • {openIntake.title}
-              </div>
+          <div onClick={() => setOpenIntake(null)} style={overlayStyle}>
+            <div onClick={(e) => e.stopPropagation()} style={modalStyle}>
+              <div style={modalTitle}>Intake • {openIntake.title}</div>
 
               <pre
                 style={{
@@ -604,23 +555,19 @@ const PsychologistSessionsPage: React.FC = () => {
                 {safePretty(openIntake.json)}
               </pre>
 
-              <button
-                style={{ ...pillBtn, width: "100%", marginTop: 10 }}
-                onClick={() => setOpenIntake(null)}
-              >
+              <button style={pillBtn} onClick={() => setOpenIntake(null)}>
                 Close
               </button>
             </div>
           </div>
         )}
-        {/* BOTTOM NAV */}
+
         <div style={bottomNav}>
-          <div style={navItem} onClick={() => navigate("/psy/profile")}>
+          <button style={navItem} onClick={() => navigate("/psy/profile")}>
             👤 Profile
-          </div>
-          <div style={navItem} onClick={() => navigate("/psy/messages")}>
-            💬 Messages
-          </div>
+          </button>
+
+          <PsyAvailabilityButton style={navItem} />
         </div>
       </div>
     </div>
