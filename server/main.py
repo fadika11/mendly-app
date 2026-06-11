@@ -99,8 +99,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await asyncio.to_thread(_safe_db_warmup)
 
     # Preload audio emotion model so first audio analysis is faster
-    await asyncio.to_thread(preload_classifier)
-    log.info("[startup] audio emotion classifier preload finished.")
+    AUDIO_PRELOAD_ON_STARTUP = os.getenv("AUDIO_PRELOAD_ON_STARTUP", "0") == "1"
+    if AUDIO_PRELOAD_ON_STARTUP:
+        await asyncio.to_thread(preload_classifier)
+        log.info("[startup] audio emotion classifier preload finished.")
+    else:
+        log.info("[startup] audio emotion classifier preload skipped.")
 
     if NOTIF_WORKER_ENABLED:
         def _run_worker():
