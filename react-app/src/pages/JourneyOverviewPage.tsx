@@ -9,15 +9,16 @@ import {
 } from "../api/auth";
 import { AudioMonitor } from "../plugins/AudioMonitor";
 import HappyPhotoMemoriesButton from "../components/HappyPhotoMemoriesButton";
+import { Capacitor } from "@capacitor/core";
 
 const LOW_MOOD_THRESHOLD = 2;
 const MEMORY_LOW_MOOD_THRESHOLD = 3;
 
-const isNative = (window as any).Capacitor?.isNativePlatform?.() ?? false;
-const API_BASE = isNative
-  ? "http://10.0.2.2:8000"
-  : (import.meta.env.VITE_API_URL as string | undefined) ?? "http://localhost:8000";
+const isNative = Capacitor.isNativePlatform?.() ?? false;
 
+export const API_BASE = isNative
+  ? (import.meta.env.VITE_NATIVE_API_URL ?? import.meta.env.VITE_API_URL ?? "http://10.0.2.2:8000")
+  : (import.meta.env.VITE_API_URL ?? "http://localhost:8000");
 
 interface HappyMemory {
   memory_id: string;

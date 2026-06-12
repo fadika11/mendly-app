@@ -2,6 +2,7 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import thankYouImg from "../assets/thank-you.png";
+import { Capacitor } from "@capacitor/core";
 
 type PhqAnswer = 0 | 1 | 2 | 3;
 
@@ -20,12 +21,11 @@ const QUESTIONS_PHQ2 = [
 type NextAction = "home" | "phq9" | null;
 
 // 🔹 Backend base URL (same pattern as other pages)
-const isNative = (window as any).Capacitor?.isNativePlatform?.() ?? false;
-  const API_BASE =
-    isNative
-      ? "http://10.0.2.2:8000"                   // emulator → host machine
-      : (import.meta.env.VITE_API_URL as string | undefined) ??
-        "http://localhost:8000";
+const isNative = Capacitor.isNativePlatform?.() ?? false;
+
+export const API_BASE = isNative
+  ? (import.meta.env.VITE_NATIVE_API_URL ?? import.meta.env.VITE_API_URL ?? "http://10.0.2.2:8000")
+  : (import.meta.env.VITE_API_URL ?? "http://localhost:8000");
 
 const Phq2Page: React.FC = () => {
   const [answers, setAnswers] = useState<(PhqAnswer | null)[]>([null, null]);

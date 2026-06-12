@@ -6,6 +6,12 @@ import { Geolocation } from "@capacitor/geolocation";
 import logo from "../assets/mendly-logo.jpg";
 import HappyPhotoMemoriesButton from "../components/HappyPhotoMemoriesButton";
 
+const isNative = Capacitor.isNativePlatform?.() ?? false;
+
+export const API_BASE = isNative
+  ? (import.meta.env.VITE_NATIVE_API_URL ?? import.meta.env.VITE_API_URL ?? "http://10.0.2.2:8000")
+  : (import.meta.env.VITE_API_URL ?? "http://localhost:8000");
+
 interface SupportLocation {
   id: string;
   name: string;
@@ -26,12 +32,6 @@ const SupportFinderPage: React.FC = () => {
   const [locations, setLocations] = useState<SupportLocation[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  const isNative = Capacitor.isNativePlatform?.() ?? false;
-
-  const API_BASE = isNative
-    ? "http://10.0.2.2:8000"
-    : (import.meta.env.VITE_API_URL as string | undefined) ??
-      "http://localhost:8000";
 
   // ===== styles =====
   const screenStyle: React.CSSProperties = {

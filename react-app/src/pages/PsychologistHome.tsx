@@ -8,7 +8,7 @@ import PsyAvailabilityButton from "../components/PsyAvailabilityButton";
 const isNative = Capacitor.isNativePlatform?.() ?? false;
 
 export const API_BASE = isNative
-  ? "http://10.0.2.2:8000" // Android / iOS app
+  ? (import.meta.env.VITE_NATIVE_API_URL ?? import.meta.env.VITE_API_URL ?? "http://10.0.2.2:8000")
   : (import.meta.env.VITE_API_URL ?? "http://localhost:8000");
 
 const PsychologistHomePage: React.FC = () => {

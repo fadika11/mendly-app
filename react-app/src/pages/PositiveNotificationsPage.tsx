@@ -13,10 +13,11 @@ import {
 import HappyPhotoMemoriesButton from "../components/HappyPhotoMemoriesButton";
 
 // ===== platform / api =====
-const isNative = Capacitor.isNativePlatform();
-const API_BASE = isNative
-  ? "http://10.0.2.2:8000"
-  : (import.meta.env.VITE_API_URL as string | undefined) ?? "http://localhost:8000";
+const isNative = Capacitor.isNativePlatform?.() ?? false;
+
+export const API_BASE = isNative
+  ? (import.meta.env.VITE_NATIVE_API_URL ?? import.meta.env.VITE_API_URL ?? "http://10.0.2.2:8000")
+  : (import.meta.env.VITE_API_URL ?? "http://localhost:8000");
 
 // ===== local notification constants =====
 const POSITIVE_CHANNEL_ID = "positive-notifications";
